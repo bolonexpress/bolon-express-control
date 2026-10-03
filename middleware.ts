@@ -169,8 +169,9 @@ export const config = {
      * accidente rutas futuras que solo empiecen por "diag".
      *
      * ⚠️ DIAGNOSTICO TEMPORAL: `diag` debe desaparecer del matcher en la
-     * FASE 10, junto con `app/diag/page.tsx`. Sin esta excepcion, /diag
-     * redirigiria a /login y no serviria para diagnosticar nada.
+     * FASE 11 (limpieza), junto con `app/diag/page.tsx` y
+     * `app/diag/permisos/page.tsx`. Sin esta excepcion, /diag redirigiria a
+     * /login y no serviria para diagnosticar nada.
      */
     '/((?!_next/static|_next/image|favicon.ico|diag(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|txt|xml)$).*)',
   ],

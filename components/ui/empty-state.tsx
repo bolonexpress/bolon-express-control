@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 
 import { BrandLogo } from '@/components/ui/brand-logo';
-import { botonClass } from '@/components/ui/button';
 
 /**
  * Estado vacio. Es la pantalla que mas se ve cuando alguien esta aprendiendo,
@@ -85,18 +84,5 @@ export function Aviso({
         {children ? <div className="leading-relaxed">{children}</div> : null}
       </div>
     </div>
-  );
-}
-
-/** Enlace con flecha, para "volver" y navegacion secundaria. */
-export function EnlaceVolver({ href, children = 'Volver' }: { href: string; children?: ReactNode }) {
-  return (
-    <a
-      href={href}
-      className={`${botonClass('fantasma', 'md', 'px-0 hover:bg-transparent')} no-underline`}
-    >
-      <span aria-hidden="true">&larr;</span>
-      <span className="underline decoration-2 underline-offset-4">{children}</span>
-    </a>
   );
 }
