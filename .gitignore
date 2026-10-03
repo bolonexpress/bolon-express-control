@@ -1,0 +1,46 @@
+# Dependencias
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js
+/.next/
+/out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Produccion
+/build
+
+# Variables de entorno (nunca commitear)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Supabase
+.branches
+.temp
+supabase/.branches
+supabase/.temp
+
+# Tests y cobertura
+coverage/
+*.lcov
+
+# Sistema y editores
+.DS_Store
+Thumbs.db
+*.pem
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Vercel
+.vercel
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
