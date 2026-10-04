@@ -4,6 +4,7 @@ import { cache } from 'react';
 import type { PostgrestError } from '@supabase/supabase-js';
 
 import { createClient } from '@/lib/supabase/server';
+import { objectPathDeFoto, pathDeFoto } from '@/lib/storage/foto-paths';
 import { esMimeDeFoto, EXTENSION_POR_MIME } from '@/lib/validation/movements';
 import { CONFIG_KEYS, PHOTO_BUCKET } from '@/types/domain';
 import type { EnumValue } from '@/types/database';
@@ -359,10 +360,20 @@ export type ResultadoFoto = { ok: true } | { ok: false; message: string };
 /**
  * Sube la foto al bucket privado y registra la fila en `public.photos`.
  *
- * El path es `movement-photos/<movement_id>/<idempotency_key>.<ext>`:
- * el segmento 2 es el movimiento (lo exige la RLS de storage y el check de la
- * tabla) y el segmento 3 es la clave de idempotencia, de modo que un doble toque
- * apunta al MISMO objeto en lugar de adjuntar dos fotos.
+ * **Dos rutas y son distintas** (ver `lib/storage/foto-paths.ts` y ADR-019):
+ * el objeto se sube como `<movement_id>/<clave>.<ext>` — relativo al bucket, que
+ * es lo que leen las policies de `storage.objects` — y en `public.photos.path`
+ * se guarda `movement-photos/<movement_id>/<clave>.<ext>`, con el prefijo que
+ * exige el CHECK `photos_path_movimiento`. Antes las dos llevaban el bucket y la
+ * policy rechazaba la subida con 403 ("new row violates row-level security
+ * policy"), dejando el movimiento registrado sin foto.
+ *
+ * El nombre del archivo es la clave de idempotencia del formulario: un doble
+ * toque apunta al MISMO objeto en lugar de adjuntar dos fotos.
+ *
+ * La subida va SIEMPRE con el cliente de sesion (`createClient()`), nunca con
+ * `service_role`: la policy es `to authenticated`, la service_role se salta la
+ * RLS y ademas el objeto quedaria sin dueno (ver ADR-019 §3).
  *
  * NO se usa `upsert`: el bucket no tiene policy de UPDATE para `authenticated`
  * (una foto no se renombra ni se reescribe), asi que un reintento fallaria por
@@ -374,7 +385,8 @@ export type ResultadoFoto = { ok: true } | { ok: false; message: string };
  * Solo se puede subir despues de crear el movimiento: la policy de storage
  * exige que el movimiento exista y no este anulado. Por eso un fallo real aqui
  * deja el movimiento registrado sin foto, y la accion lo reporta explicitamente
- * en lugar de ocultarlo.
+ * en lugar de ocultarlo. Esa foto se puede readjuntar despues desde el detalle
+ * (`adjuntarFotoMovimientoAction`).
  */
 export async function adjuntarFotoMovimiento(
   movimientoId: string,
@@ -389,11 +401,13 @@ export async function adjuntarFotoMovimiento(
     return { ok: false, message: 'La foto debe ser una imagen (JPEG, PNG, WebP o HEIC).' };
   }
 
-  const path = `${PHOTO_BUCKET}/${movimientoId}/${idempotencyKey}.${EXTENSION_POR_MIME[mime]}`;
+  const nombre = `${idempotencyKey}.${EXTENSION_POR_MIME[mime]}`;
+  const objectPath = objectPathDeFoto(movimientoId, nombre);
+  const path = pathDeFoto(movimientoId, nombre);
 
   const { error: errorSubida } = await supabase.storage
     .from(PHOTO_BUCKET)
-    .upload(path, archivo, { contentType: mime, upsert: false });
+    .upload(objectPath, archivo, { contentType: mime, upsert: false });
 
   const objetoYaExistia =
     errorSubida !== null &&
@@ -401,7 +415,7 @@ export async function adjuntarFotoMovimiento(
 
   if (errorSubida && !objetoYaExistia) {
     console.error('[movimientos:adjuntarFotoMovimiento] fallo la subida', {
-      path,
+      objectPath,
       bucket: PHOTO_BUCKET,
       statusCode: errorSubida.statusCode,
       message: errorSubida.message,

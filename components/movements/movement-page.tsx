@@ -19,6 +19,12 @@ type Ayuda = { resumen: string; pasos: string[]; nota?: string };
  * entrada"), la descripcion dice por que sirve en una frase, y el botón "?" de
  * la cabecera explica los tres pasos del asistente sin obligar a escribir.
  *
+ * **El paso 3 nombra las dos reglas del negocio** (ADR-019): el motivo es
+ * obligatorio y la observación es opcional. Es la duda mas frecuente al abrir
+ * estas pantallas, porque el formulario las muestra juntas y las dos parecen
+ * igual de necesarias. Se dice en el "?" y no se deduce del asterisco: nadie
+ * deberia tener que guardar para averiguarlo.
+ *
  * Vive en un objeto por tipo para que la pantalla sea una sola: el flujo, los
  * permisos y el formulario son identicos, solo cambian las palabras.
  */
@@ -31,9 +37,9 @@ const COPIA: Record<TipoMovimiento, { titulo: string; descripcion: string; ayuda
       pasos: [
         'Paso 1: busca el producto por nombre, código o SKU y tócalo.',
         'Paso 2: escribe cuántas unidades entraron y toma la foto.',
-        'Paso 3: revisa el resumen y toca «Guardar la entrada».',
+        'Paso 3: elige el motivo (obligatorio), escribe observaciones si quieres y toca «Guardar la entrada».',
       ],
-      nota: 'Si el producto no aparece, primero hay que crearlo en «Productos».',
+      nota: 'El motivo es obligatorio y la observación es opcional. Si el producto no aparece, primero hay que crearlo en «Productos».',
     },
   },
   salida: {
@@ -44,9 +50,9 @@ const COPIA: Record<TipoMovimiento, { titulo: string; descripcion: string; ayuda
       pasos: [
         'Paso 1: busca el producto y tócalo.',
         'Paso 2: escribe cuánto salió y toma la foto.',
-        'Paso 3: revisa el resumen y toca «Guardar la salida».',
+        'Paso 3: elige el motivo (obligatorio), escribe observaciones si quieres y toca «Guardar la salida».',
       ],
-      nota: 'Si no hay suficiente inventario, el sistema te avisa antes de guardar.',
+      nota: 'El motivo es obligatorio y la observación es opcional. Si no hay suficiente inventario, el sistema te avisa antes de guardar.',
     },
   },
   ajuste: {
@@ -58,9 +64,9 @@ const COPIA: Record<TipoMovimiento, { titulo: string; descripcion: string; ayuda
       pasos: [
         'Paso 1: busca el producto.',
         'Paso 2: escribe la cantidad real que hay. Si sobra, pon un número negativo.',
-        'Paso 3: revisa y toca «Guardar el ajuste».',
+        'Paso 3: elige el motivo (obligatorio), escribe observaciones si quieres y toca «Guardar el ajuste».',
       ],
-      nota: 'Un ajuste queda registrado en la bitácora con tu nombre. Úsalo con calma.',
+      nota: 'En un ajuste el motivo es obligatorio y la observación es opcional. Queda todo en la bitácora con tu nombre: úsalo con calma.',
     },
   },
 };

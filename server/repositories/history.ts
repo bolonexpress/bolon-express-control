@@ -1,6 +1,7 @@
 import { cache } from 'react';
 
 import { createClient } from '@/lib/supabase/server';
+import { objectPathDesdePath } from '@/lib/storage/foto-paths';
 import { PHOTO_BUCKET } from '@/types/domain';
 import type { HistorialFiltrosParsed } from '@/lib/validation/history';
 import type { HistorialOpciones, HistorialPagina } from '@/types/domain';
@@ -117,6 +118,11 @@ export type FotoDetalle = { id: string; url: string; mime: string } | { id: stri
  * bucket es privado: si el usuario no tiene `photos:read` la policy de storage
  * falla y devolvemos la fila SIN url (la UI pinta el placeholder).
  *
+ * `photos.path` lleva el prefijo del bucket y Storage lo NO quiere: la policy
+ * toma el movimiento de `(storage.foldername(name))[1]`, asi que hay que quitar
+ * `movement-photos/` antes de firmar. Con el prefijo de mas la firma caia en un
+ * objeto inexistente y la foto no se veia (ADR-019).
+ *
  * Solo lo usa la pagina de detalle: el listado jamas firma fotos (Fase 7:
  * "no cargar fotos completas en el listado, solo el conteo").
  */
@@ -139,7 +145,7 @@ export async function listFotosDelMovimiento(movimientoId: string): Promise<Foto
     (data ?? []).map(async (foto): Promise<FotoDetalle> => {
       const { data: firmada, error: errorFirma } = await supabase.storage
         .from(PHOTO_BUCKET)
-        .createSignedUrl(foto.path, 120);
+        .createSignedUrl(objectPathDesdePath(foto.path), 120);
 
       if (errorFirma || !firmada?.signedUrl) {
         return { id: foto.id, url: null, mime: foto.mime_type };

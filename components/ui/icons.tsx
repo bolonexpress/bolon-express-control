@@ -257,3 +257,27 @@ export const IconMano = (p: IconProps) => (
     <path d="M14.6 11.2V6.8a1.4 1.4 0 0 1 2.8 0v7.4c0 3.4-2.4 6.3-5.8 6.3-2.6 0-4-1.2-5.2-3l-2.3-3.6a1.5 1.5 0 0 1 2.4-1.8L9 14.6V11" />
   </Base>
 );
+
+/** Ojo: "ver" un dato escondido (la contrasena temporal). */
+export const IconOjo = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+    <circle cx="12" cy="12" r="3" />
+  </Base>
+);
+
+/** Llave: generar una contrasena nueva. */
+export const IconLlave = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="8" cy="12" r="4" />
+    <path d="M12 12h9m-3 0v3m-2.5-3v2" />
+  </Base>
+);
+
+/** Persona: una ficha de usuario en la administracion. */
+export const IconPersona = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="8" r="3.5" />
+    <path d="M5 20a7 7 0 0 1 14 0" />
+  </Base>
+);

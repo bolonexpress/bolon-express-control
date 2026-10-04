@@ -57,64 +57,38 @@ de que el sistema quede sin RAM.
 > `package.json`. Cerrar procesos huerfanos de Node antes de arrancar tambien
 > ayuda: en Windows, `taskkill /F /IM node.exe`.
 
-## `/diag` — diagnostico de sesion (TEMPORAL, SOLO DESARROLLO)
+## Las rutas `/diag` se eliminaron en la Fase 11
 
-Ruta de diagnostico en `app/diag/page.tsx`. Solo responde cuando
-`NODE_ENV !== 'production'`; en produccion devuelve 404 (`notFound()`).
+`/diag` (sesion) y `/diag/permisos` (permisos) eran pantallas de diagnostico que
+existan fuera del middleware. Se borraron junto con su excepcion en el `matcher`
+de `middleware.ts`: eran un riesgo de despliegue (vease abajo) y ya cumplieron su
+papel.
 
-Esta **fuera del middleware** a proposito: el `matcher` de `middleware.ts`
-excluye `diag(?:/|$)`. Si el middleware la protegiera, un problema de sesion la
-mandaria a `/login` y no serviria para diagnosticar nada.
+El diagnostico de sesion que hacian se resuelve hoy asi:
 
-Muestra, en texto plano y sin estilos:
+- **Cookie de sesion ausente o caducada** → se limpia desde el navegador con
+  `Cookies > localhost > borrar el dominio`. Si persiste, mira el dominio y el
+  path de las cookies `sb-*`.
+- **`permission denied for table user_roles`** → ver la seccion siguiente.
+- **Login que entra y sale** → `profiles` o `user_roles` ilegibles; sin la ruta
+  `/diag` el sintoma se diagnostica con `/no-autorizado` y la consola del
+  servidor, que ahora registra el motivo (ver ADR-018).
 
-| # | Contenido |
-|---|-----------|
-| 1 | Nombres de las cookies de la request (**sin valores**) |
-| 0 | Si faltan `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` |
-| 2 | `supabase.auth.getSession()` con el cliente de servidor: hay sesion, uid, email, `expires_at`, error |
-| 2b | `supabase.auth.getUser()` con el mismo cliente (valida el JWT) |
-| 3 | Lectura de `profiles` con el cliente de sesion: fila completa o error exacto de PostgREST/RLS |
-| 4 | La misma lectura con `service_role` (bypasea RLS), para comparar |
-| 5 | Veredicto |
+Dos cosas de `/diag` que siguen siendo verdad y conviene no olvidar:
 
-### Como interpretarlo
+> **`admin` tiene acceso total por diseno**: `contextHasPermission()` devuelve
+> `true` para cualquier permiso si `roleKeys` incluye `admin`, sin mirar el array
+> `permissions`. Que `role_permissions` este vacio para `admin` NO impide entrar a
+> la app, pero si rompe las policies de la base (`has_permission()`).
 
-- **Sesion dice SI y admin tambien ve la fila, pero la sesion no** → problema
-  de **policy de SELECT** en `profiles` (migracion 04). La seccion 3 trae el
-  error exacto de PostgREST.
-- **`getSession()` dice SI pero `getUser()` dice NO** → la cookie esta caducada o
-  manipulada. **No** es un problema de RLS: el token no vale.
-- **Admin tampoco ve la fila** → el usuario existe en Auth pero no tiene
-  `profiles`: revisar el trigger de alta o `seed:admin`.
-- **Sin sesion y sin cookies `sb-*`** → el bloqueo es anterior a la app
-  (credenciales, `.env.local` o cookies no enviadas).
-
-> ### ⚠️ RIESGO DE DESPLIEGUE — QUITAR `NODE_ENV` DE `.env.local`
+> ### ⚠️ `NODE_ENV` no debe estar en `.env.local`
 >
-> Tu `.env.local` tiene `NODE_ENV=development` fijado a mano. **No deberia
-> estar ahi**: Next.js ya lo deduce del comando (`next dev` → `development`,
-> `next build`/`next start` → `production`).
->
-> Si ese valor llega al entorno de un despliegue, el guard de `/diag` NO se
-> activa y la ruta queda **publica**, exponiendo nombre, correo y telefono de los
-> usuarios de `profiles`. `.env.local` esta en `.gitignore`, asi que el repo es
-> seguro, pero Vercel usa variables del panel: revisa ahi que `NODE_ENV` no
-> este definido. Recomendado: borrar la linea de `.env.local`.
->
-> Recuerda tambien quitar `diag` del `matcher` de `middleware.ts` en la Fase 11.
-
-### `/diag/permisos` — diagnostico de permisos (TEMPORAL, SOLO DESARROLLO)
-
-Muestra el uid de la sesion, el `user_roles JOIN roles`, los `role_permissions`
-del rol `admin`, y el resultado real de `getAuthContext()` y
-`hasPermission()` permiso por permiso. Exige `user_roles`, `roles`,
-`role_permissions` y `permissions`.
-
-> **`admin` tiene acceso total por diseño**: `contextHasPermission()` devuelve
-> `true` para cualquier permiso si `roleKeys` incluye `admin`, sin mirar el
-> array `permissions`. Que `role_permissions` este vacio para `admin` NO impide
-> entrar a la app, pero sí rompe las policies de la base (`has_permission()`).
+> Si tu `.env.local` tiene `NODE_ENV=development` fijado a mano, **borralo**.
+> Next.js ya lo deduce del comando (`next dev` → `development`, `next build` /
+> `next start` → `production`). Ese valor era el unico guard que protegia `/diag`,
+> asi que en produccion la ruta exponia nombre, correo y telefono de todos los
+> usuarios de `profiles`. Con `/diag` borrada el riesgo desaparece, pero la linea
+> sigue sobrando en `.env.local`.
 
 ### ⚠️ `user_roles` necesita GRANT de SELECT (bug corregido en la migracion 04)
 
@@ -178,7 +152,6 @@ public/assets/logo.png                  logo de marca (fuente de verdad visual)
 app/                                    rutas: (auth) login y cambio de clave, (app) shell autenticado
   globals.css                           tokens de marca (@theme): color, tipografia, espaciado, radios, sombras
   icon.png                              favicon generado desde el logo
-  diag/                                 ⚠️ TEMPORAL, SOLO DEV — /diag sesion y /diag/permisos. BORRAR EN FASE 11
   (app)/page.tsx                        inicio: 3 acciones primarias gigantes + modulos secundarios
   (app)/bienvenida                      el recorrido del circuito, en formato lectura
   (app)/productos|categorias|unidades   catalogo CRUD (listado, nuevo, editar)
@@ -187,6 +160,9 @@ app/                                    rutas: (auth) login y cambio de clave, (
   (app)/inventario                      stock calculado, solo lectura, estado OK/Bajo/Critico
   (app)/compras                         lista de compras en tiempo real (agregar, estados, historial)
   (app)/historial                       libro de movimientos con filtros y paginacion keyset
+  (app)/admin/usuarios                  personas: listado con filtros, alta y ficha (users:manage)
+  (app)/admin/usuarios/nuevo            alta: correo, nombre, telefono y rol -> clave temporal
+  (app)/admin/usuarios/[id]             ficha: datos, rol, activar/desactivar y reset de clave
   (app)/admin/auditoria                 panel de auditoria con filtros y antes/despues (audit:read)
 components/ui/                          sistema de diseno: BrandLogo, Button, Card, Field, Checkbox,
                                          PageHeader, Dialog, HelpButton, BarraPasos, EstadoVacio, Aviso,
@@ -198,8 +174,14 @@ components/inventory/                   tabla/tarjetas del inventario (solo lect
 components/shopping/                    tablero de compras, formulario rapido, botones de estado, realtime
 components/history/                     barra de filtros, tarjetas/tabla y "Cargar mas" del historial
 components/audit/                       panel, filtros y diff antes-despues de la bitacora
+components/users/                      listado con filtros y paginacion keyset, alta, ficha,
+                                         roles, activar/desactivar y reset de clave
+docs/PRUEBAS-FINALES.md                protocolo de la Fase 12: 67 pasos para PC y celular,
+                                         resultados runtime y plan de volumen
 scripts/seed-admin.mjs                  crea el primer admin (solo service_role)
 scripts/security-audit.mjs              revision estatica de seguridad (Fase 8)
+scripts/storage-check.mjs               prueba de las policies del bucket de fotos
+                                         (token real + cliente de sesion, ADR-019)
 ```
 
 ## Decisiones de fase 1 (resumen)
@@ -214,7 +196,7 @@ scripts/security-audit.mjs              revision estatica de seguridad (Fase 8)
 | Corregir no es borrar | `movements` es inmutable (trigger); se anula y se registra de nuevo |
 | Idempotencia | `movements.idempotency_key` UNIQUE, clave enviada por el cliente |
 | RBAC dinamico | `permissions` + `roles` + `role_permissions` + `user_roles`, sin redeploy |
-| Fotos privadas | bucket `movement-photos`, path atado al `movement_id` |
+| Fotos privadas | bucket `movement-photos`, path atado al `movement_id`; el objeto va sin el bucket y `photos.path` con el (`lib/storage/foto-paths.ts`, ADR-019) |
 | Usuario no se borra | `profiles.is_active`; FKs `ON DELETE RESTRICT` protegen el historial |
 
 ## Migraciones
@@ -234,6 +216,7 @@ scripts/security-audit.mjs              revision estatica de seguridad (Fase 8)
 | `20260101001000_11_compras_realtime.sql` | publica `shopping_list`/`shopping_list_history` en realtime + trigger de transiciones de estado |
 | `20260101001100_12_historial.sql` | permiso `history:read` + grants a los cuatro roles |
 | `20260101001200_13_auditoria.sql` | RPC `log_audit` (unica via de escritura de `audit_logs` desde la app) |
+| `20260101001300_14_storage_policies_fix.sql` | `movement_id_de_foto()` + policies de `movement-photos` alineadas con la ruta real del objeto (ADR-019) |
 
 Requisito: PostgreSQL 15+ (las vistas usan `security_invoker`).
 
@@ -249,9 +232,15 @@ supabase link --project-ref <ref>
 supabase db push
 ```
 
-SQL Editor de Supabase: ejecutar los archivos 01 a 13 en orden lexicografico.
-Las migraciones 09 a 13 son **aditivas** y se pueden aplicar sobre una base que
+SQL Editor de Supabase: ejecutar los archivos 01 a 14 en orden lexicografico.
+Las migraciones 09 a 14 son **aditivas** y se pueden aplicar sobre una base que
 ya tenga 01-08: no alteran datos previos.
+
+> La 14 **no es el arreglo** de la foto que no subia (eso fue el path en el
+> codigo, ADR-019): centraliza la regla del nombre del objeto en
+> `movement_id_de_foto()` para que las tres policies no dependan de repetir el
+> calculo de `storage.foldername()`. Es idempotente y se puede aplicar antes de
+> volver a probar la app.
 
 ### Primer usuario (admin)
 
@@ -309,9 +298,9 @@ select * from v_movimientos order by created_at desc limit 20;
 | 7 | Historial con filtros y paginacion (`/historial`, `history:read`) | Completada (pendiente aprobacion) |
 | 8 | Auditoria y revision de seguridad (`/admin/auditoria`, `audit:read`) | Completada (pendiente aprobacion) |
 | 9 | Rediseño UI/UX, accesibilidad y branding (tokens del logo, inicio simplificado, flujos guiados, onboarding) | Completada, con los 3 pendientes cerrados (pendiente aprobacion) |
-| 10 | Administracion (usuarios, roles, config) | Pendiente |
-| 11 | Dashboard, alertas, reportes, PWA + limpieza: borrar `/diag` y su excepcion en el `matcher` del middleware, codigo muerto, documentacion | Pendiente |
-| 12 | Pruebas finales: checklist funcional de extremo a extremo con cada rol | Pendiente |
+| 10 | Administracion de usuarios (`/admin/usuarios`, `users:manage`): listado, alta, roles, activar/desactivar y reset de clave | Completada (pendiente aprobacion) |
+| 11 | Bug de movimientos (`peso_kg` NaN), foto que sobrevive al reenvio, borrado de `/diag`, limpieza de logs de debug, checklist | Completada (pendiente aprobacion) |
+| 12 | Pruebas finales con datos reales (`docs/PRUEBAS-FINALES.md`) | En curso: guion listo, a la espera de ejecutarlo |
 | 13 | Despliegue: variables documentadas, `supabase db push`, primer arranque y verificacion en produccion | Pendiente |
 
 ## Verificacion de la fase 3
@@ -470,3 +459,114 @@ Requieren la app en marcha y dedos humanos; las dejo para el repaso visual.
 - [ ] El boton "?" esta en cada pantalla y explica esa pantalla en 2-3 frases.
 - [ ] Cada pantalla se usa en < 375px sin scroll horizontal y a 200% de zoom sin perdida de contenido.
 - [ ] `prefers-reduced-motion` desactiva animaciones.
+
+## Verificacion de la fase 10
+
+Checklist a ejecutar con la app levantada (`npm run dev`). **No toca el esquema**:
+`profiles`, `user_roles`, los permisos y el trigger de auditoria ya existen. Si
+algo de aqui falla, el problema es de la capa de aplicacion.
+
+### Cerrado por codigo
+
+- [x] `npm run typecheck`, `npm run lint`, `npm run build` y `npm run audit:security` en verde (6/6).
+- [x] Las tres rutas (`/admin/usuarios`, `/admin/usuarios/nuevo`, `/admin/usuarios/[id]`) exigiendo `users:manage` con `requirePagePermission`, igual que el resto de paginas.
+- [x] La contrasena temporal viaja en la respuesta de la Server Action, nunca en la URL. Comprobable en la pestaña Network: el POST no lleva la clave y la URL queda limpia.
+- [x] Ninguna pantalla de esta seccion borra usuarios. No hay llamada a `delete` sobre `profiles` ni a `admin.deleteUser`.
+
+### Comprobaciones manuales
+
+- [ ] `admin` abre `/admin/usuarios`; ve el listado con nombre, correo, rol y estado. `supervisor`, `operador` y `consulta` reciben `/no-autorizado` y **no** ven el enlace "Personas" ni en la barra ni en el inicio.
+- [ ] Filtros: por nombre, por correo (parte del termino), por rol y por estado. La combinacion acota. Un filtro basura (`?rol=root`) no rompe: avisa y muestra todo.
+- [ ] "Cargar mas" con mas de 25 personas: sin repetir ni saltar, y el orden por nombre se mantiene.
+- [ ] Alta: al guardar aparece la clave temporal **una sola vez**. No esta en la URL ni sobrevive a recargar. El correo queda confirmado y la persona entra con esa clave.
+- [ ] La persona entra con la clave temporal y la app la manda a `/cambiar-password` antes de dejarla usar nada.
+- [ ] Roles: al cambiar un rol, el permiso aplica en la siguiente peticion (no hay que volver a entrar). La bitacora registra el cambio con `granted_by`.
+- [ ] Anti-encierro, los cuatro casos: no autodestacar; no quitarse el propio rol admin; no desactivar al ultimo admin activo; no quitar `admin` al ultimo admin activo. Cada uno muestra el motivo y **deja el modal abierto**.
+- [ ] Desactivar no borra nada: los movimientos y compras anteriores conservan el nombre de la persona, y `/admin/auditoria` muestra la fila del cambio.
+- [ ] Reset: genera clave nueva, invalida la anterior al instante y marca `force_password_change`. En `/admin/auditoria` aparece un evento `cambio_password` (esta escritura en `auth.users` no la ve ningun trigger).
+- [ ] Sin `SUPABASE_SERVICE_ROLE_KEY`: la app arranca, el listado muestra "Correo no disponible" y el reset dice que este entorno no puede, sin reventar.
+- [ ] Sin JavaScript: el alta, el cambio de rol y la desactivacion se envian igual (`<form action>`), y el listado renderiza en el servidor.
+
+## Verificacion de la fase 11
+
+Esta fase es de **limpieza y correccion de un bug**, asi que casi todo se puede
+comprobar sin base de datos: el esquema de Zod es codigo puro y se ejecuta, y el
+resto se comprueba con los cuatro comandos de la tabla.
+
+### Cerrado por codigo
+
+- [x] `npm run typecheck`, `npm run lint`, `npm run build` y `npm run audit:security` en verde (6/6).
+- [x] **Bug `peso_kg` NaN**: reproducido antes de tocar nada. Con un producto en
+      modo `cantidad` (el caso ACEITE, unidad `l`), el formulario no dibuja el
+      campo de peso, `texto(formData, 'peso_kg')` devuelve `""`, `z.coerce.number()`
+      lo convertia en `NaN` y Zod rechazaba con `invalid_type` sobre un campo que
+      el usuario nunca ve. Tras el fix, las 15 comprobaciones de la matriz pasan:
+      cantidad sin peso, peso sin cantidad, `ambos`, vacios, cero, negativos,
+      decimales y ajustes. Comprobable ejecutando `registrarMovimientoSchema` en
+      aislamiento (ver ADR-017).
+- [x] Con el fix, "ambos vacios" devuelve el mensaje util ("Ingresa la cantidad o
+      el peso del movimiento") en vez de dos `invalid_type` que no senalaban nada.
+- [x] La foto se conserva tras un envio fallido: `PhotoInput` guarda el `File` y
+      lo reinyecta con `DataTransfer` cuando la accion responde. El mensaje
+      distingue "Foto lista" de "Foto recuperada, se enviará otra vez".
+- [x] `/diag` y `/diag/permisos` borrados, junto con `diag(?:/|$)` del `matcher`,
+      las dos entradas de `EXENTAS_PERMISOS` y la rama `esRutaDiag`.
+- [x] `npm run build` ya no genera `/diag` ni `/diag/permisos`.
+- [x] Cero `console.log` de depuracion en `app/`, `components/`, `lib/`,
+      `server/`, `types/` y `middleware.ts`. Los que quedan son `console.error`
+      en fallos que no tienen otra traza (ver ADR-018) y la salida de los scripts
+      de CLI, que es su interfaz.
+- [x] Sin codigo muerto por el borrado: `tsc` y `eslint` limpios (unused imports
+      incluidos).
+
+### Se deja abierto para la fase 12
+
+Estos necesitan **la base de datos real y tráfico**, asi que no se pueden dar por
+cerrados desde el codigo:
+
+- [ ] `explain` de los indices de `v_movimientos` y de `profiles_full_name_id_idx`
+      (este ultimo sigue sin crearse: la busqueda de usuarios recorre la tabla).
+- [ ] La firma de las fotos caduca a los 120 s y se refresca al abrir el detalle.
+- [ ] Paginacion "Cargar mas" con volumen real (> 50 registros), sin repetir ni saltar,
+      en `/historial`, `/admin/auditoria` y `/admin/usuarios`.
+- [ ] Orden del render en realtime: en `/compras`, un cambio hecho desde otro
+      dispositivo aparece sin recargar y sin pisar lo que se esta escribiendo.
+- [ ] El bug de movimientos **en la app de verdad**: registrar entrada, salida y
+      ajuste de un producto por peso y otro por cantidad, con foto, y comprobar
+      que la foto sobrevive a un rechazo.
+- [ ] Rutas de permisos: que `supervisor`, `operador` y `consulta` reciban
+      `/no-autorizado` en cada pantalla de administracion, contra la RLS real.
+- [ ] Los checklists de las fases 1 a 10 que siguen con `[ ]`: son comprobaciones
+      manuales de pantalla, contraste, teclado y `< 375 px`, y no se pueden cerrar
+      sin una persona mirando la app.
+
+## Verificacion de la fase 12
+
+El protocolo numerado para PC y celular esta en
+**[`docs/PRUEBAS-FINALES.md`](docs/PRUEBAS-FINALES.md)** (67 pasos, con resultado
+esperado y casilla por paso). Alli queda tambien:
+
+- El snapshot de la base real del `2026-10-04` y la config que gobierna cada
+  comportamiento (`require_movement_photo`, `allow_negative_stock`, ...).
+- El resultado de las verificaciones runtime de solo lectura: **9 hechas** (la mas
+  importante, R-1: el bug del `peso_kg` corregido y comprobado sobre un movimiento
+  real) y **3 bloqueadas** por falta de acceso directo a Postgres, con el SQL
+  exacto para pegar en el SQL Editor de Supabase.
+- **H-1** resuelto: la foto no fallaba por la puerta sino por el `INSERT` en
+  Storage (`new row violates row-level security policy`). Diagnostico y arreglo
+  en **ADR-019**; verificado en runtime con `npm run check:storage` (token real
+  de la API de Auth, cliente de sesion, subida -> 201 -> borrado).
+- **H-2** resuelto: el motivo es obligatorio y la observacion es opcional. Sin
+  cambios de esquema; se ajusto la ayuda "?" y el formulario.
+- El plan de volumen **aprobado** para probar la paginacion y los `EXPLAIN`, con
+  su orden: despues de que el guion A-F pase completo.
+
+> **Ojo con la IP del celular:** `172.24.176.1` es el puente virtual de WSL y el
+> celular **no tiene ruta hacia el**. En el Wi-Fi de la casa hay que usar
+> `http://192.168.1.3:3000`.
+
+> **Ojo con `npm run build`:** si el servidor de desarrollo esta levantado,
+> `next build` y `next dev` se pelean por la misma carpeta `.next` y el build
+> puede morir con `Invariant: no direct app page entry found for /_not-found`.
+> No es un fallo del codigo: **para el build, para el `dev` primero**. Para las
+> pruebas solo hace falta `npm run dev`.

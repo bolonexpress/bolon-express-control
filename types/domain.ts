@@ -306,6 +306,49 @@ export type CatalogActionState = Resultado<{ id: string; mensaje: string }> | nu
 export type ShoppingActionState = Resultado<{ id: string; mensaje: string }> | null;
 
 // -----------------------------------------------------------------------------
+// Usuarios (Fase 10): DTOs que la UI consume
+// -----------------------------------------------------------------------------
+
+/**
+ * Un usuario con sus roles, tal como lo pinta el listado y la ficha.
+ *
+ * `email` no viene de `profiles`: vive en `auth.users` y exige service_role en
+ * servidor. Por eso puede venir `null` (sin `SUPABASE_SERVICE_ROLE_KEY` la app
+ * sigue funcionando, pero sin correos) y la UI lo trata como "no disponible",
+ * no como "no tiene".
+ */
+export type UsuarioRow = {
+  id: string;
+  email: string | null;
+  full_name: string;
+  phone: string | null;
+  is_active: boolean;
+  force_password_change: boolean;
+  last_seen_at: string | null;
+  created_at: string;
+  roleKeys: string[];
+  roleNames: string[];
+};
+
+/**
+ * Estado de las Server Actions de usuarios.
+ *
+ * `claveTemporal` viaja aqui, en la respuesta de la accion, y NO en la URL:
+ * una contrasena en un query param queda en el historial del navegador, en los
+ * logs del servidor y en el Referer. La UI la muestra una vez y la borra al
+ * navegar.
+ */
+export type UsuariosActionState =
+  | Resultado<{
+      mensaje: string;
+      claveTemporal?: string;
+      email?: string;
+      filas?: UsuarioRow[];
+      nextCursor?: string | null;
+    }>
+  | null;
+
+// -----------------------------------------------------------------------------
 // Compras (Fase 6): DTOs que la UI consume
 // -----------------------------------------------------------------------------
 

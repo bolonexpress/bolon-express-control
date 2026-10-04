@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "seed:admin": "node scripts/seed-admin.mjs",
-    "audit:security": "node scripts/security-audit.mjs"
+    "audit:security": "node scripts/security-audit.mjs",
+    "check:storage": "node scripts/storage-check.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

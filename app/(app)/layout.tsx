@@ -29,6 +29,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const veCompras = contextHasPermission(context, PERMISOS.shoppingRead);
   const veHistorial = contextHasPermission(context, PERMISOS.historyRead);
   const veAuditoria = contextHasPermission(context, PERMISOS.auditRead);
+  const vePersonas = contextHasPermission(context, PERMISOS.usersManage);
 
   // El RBAC no cambia: solo se ofrece lo que el rol puede leer, igual que antes.
   const secciones = [
@@ -42,8 +43,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       : []),
     ...(veMovimientos ? [{ href: '/movimientos', label: 'Movimientos' }] : []),
     ...(veCompras ? [{ href: '/compras', label: 'Compras' }] : []),
-    ...(veHistorial ? [{ href: '/historial', label: 'Historial' }] : []),
-    ...(veAuditoria ? [{ href: '/admin/auditoria', label: 'Auditoría' }] : []),
+...(veHistorial ? [{ href: '/historial', label: 'Historial' }] : []),
+...(vePersonas ? [{ href: '/admin/usuarios', label: 'Personas' }] : []),
+...(veAuditoria ? [{ href: '/admin/auditoria', label: 'Auditoría' }] : []),
   ];
 
   return (

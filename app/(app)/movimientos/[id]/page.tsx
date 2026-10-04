@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { AnularForm } from '@/components/movements/anular-form';
+import { AdjuntarFotoForm } from '@/components/movements/adjuntar-foto-form';
 import { tarjetaClass } from '@/components/ui/field';
 import { HelpButton } from '@/components/ui/help-button';
 import { formatearCantidad } from '@/lib/format/units';
@@ -37,6 +38,12 @@ export default async function DetalleMovimientoPage({
 
   const puedeAnular = contextHasPermission(context, PERMISOS.movementsAnular) && !movimiento.anulacion_id;
   const puedeVerFotos = contextHasPermission(context, PERMISOS.photosRead);
+  // Readjuntar la foto es lo que exige la policy de INSERT de Storage
+  // (`photos:write` + `movements:write`), asi que el boton pide lo mismo.
+  const puedeAdjuntarFotos =
+    contextHasPermission(context, PERMISOS.photosWrite) &&
+    contextHasPermission(context, PERMISOS.movementsWrite) &&
+    !movimiento.anulacion_id;
   // Solo el detalle firma fotos (el listado pinta un icono). Sin photos:read
   // la policy de storage falla y llegan filas sin url: el placeholder las cubre.
   const fotos = puedeVerFotos ? await listFotosDelMovimiento(movimiento.id) : [];
@@ -93,6 +100,7 @@ export default async function DetalleMovimientoPage({
             pasos={[
               'Abajo del todo, «Detalle» dice el producto, la cantidad y el motivo.',
               'La sección de fotos muestra lo que se tomó en el momento de anotarlo.',
+              'Si a un movimiento le falta la foto, en esa misma sección se puede adjuntar después.',
               'Si está mal, abajo se puede anular con un motivo.',
             ]}
             nota="Anular no borra: deja el movimiento escrito, pero ya no suma ni resta al inventario."
@@ -132,9 +140,16 @@ export default async function DetalleMovimientoPage({
           Fotografía{movimiento.fotos_count > 1 ? 's' : ''} del movimiento
         </h2>
         {movimiento.fotos_count === 0 ? (
-          <p className="mt-2 text-sm text-texto-suave">
-            Sin fotos. Debería haber al menos una: el movimiento se registra con foto.
-          </p>
+          <>
+            <p className="mt-2 text-sm text-texto-suave">
+              {puedeAdjuntarFotos
+                ? 'Este movimiento se registró sin foto. Puedes adjuntarla ahora.'
+                : 'Sin fotos. Debería haber al menos una: el movimiento se registra con foto.'}
+            </p>
+            {puedeAdjuntarFotos ? (
+              <AdjuntarFotoForm movementId={movimiento.id} codigo={movimiento.codigo} />
+            ) : null}
+          </>
         ) : !puedeVerFotos ? (
           <p className="mt-2 text-sm text-texto-suave">
             Hay {movimiento.fotos_count} foto(s), pero tu rol no tiene {PERMISOS.photosRead} para

@@ -432,3 +432,379 @@ la UI de `/admin/auditoria` solo muestra los campos que cambiaron (ignora
 `created_at`/`updated_at`/`display_id`). Reconstruir el diff en un servicio
 seria redundante y reventaria la retrocompatibilidad con los datos ya
 registrados.
+
+---
+
+## ADR-016 · Fase 10: una sola acción por poder, cerrojo anti-encierro y la clave fuera de la URL
+
+### 1. `users:manage` y solo ese
+
+**Contexto.** El enunciado menciona `users:read` y `users:manage`. El seed de
+la Fase 1 solo siembra `users:manage`.
+
+**Decision.** Las tres rutas (`/admin/usuarios`, `/admin/usuarios/nuevo`,
+`/admin/usuarios/[id]`) exigen `users:manage`, sin excepcion. **La fase no
+anade migracion ni permiso nuevo**: quien puede administrar personas ya puede
+leerlas. Anadir `users:read` abriria una lectura de datos personales (correos,
+telefonos, ultimos accesos) a un perfil que no existe en este proyecto.
+
+### 2. No existe "borrar usuario": solo desactivar
+
+**Decision.** Ninguna accion llama a `delete` sobre `profiles` ni a
+`admin.deleteUser`. La unica operacion de salida es `profiles.is_active = false`,
+que ya respalda el `ON DELETE RESTRICT` de las FKs de `movements` y `shopping`.
+
+**Por que.** Un usuario que borro es un nombre que desaparece de la bitacora y
+de los movimientos que el equipo necesita explicar. Desactivar cierra la puerta
+sin perder el rastro. La pantalla de baja pide confirmacion y explica
+explicitamente que el historial se conserva.
+
+### 3. La contrasena temporal viaja en la respuesta, nunca en la URL
+
+**Contexto.** El alta de usuario necesita redirigir al listado tras guardar,
+que es el camino natural para el resto de la app.
+
+**Decision.** El alta **no redirige**: `crearUsuarioAction` y
+`resetPasswordAction` devuelven `data.claveTemporal` y la UI la muestra una vez
+en un modal con "copiar". Una contrasena en un query param queda en el historial
+del navegador, en el log del servidor y en la cabecera `Referer` de la peticion
+siguiente.
+
+**Consecuencia.** El `estado.data` de `UsuariosActionState` lleva `claveTemporal`
+por diseno. La clave se descarta al cerrar el modal; pulsar "crear otra persona"
+deja de mostrarla.
+
+### 4. Cerrojo anti-encierro en el servidor, explicado en la UI
+
+**Contexto.** Un admin puede dejar la tienda sin nadie que la administre: si se
+desactiva a si mismo, si se quita el propio rol `admin`, o si toca el ultimo
+admin activo. El ultimo escenario no se puede resolver solo con un chequeo
+"soy yo": depende de cuantos admins quedan.
+
+**Decision.** Cuatro reglas, todas evaluadas **en la Server Action** (la UI
+nunca es la que decide):
+
+1. Nadie se desactiva a si mismo.
+2. Nadie se quita a si mismo el rol `admin` que tiene.
+3. No se desactiva al ultimo admin activo.
+4. No se le quita `admin` al ultimo admin activo.
+
+El conteo usa `contarAdminsActivos(exceptoId)`. Cuando el servidor rechaza, el
+modal **se queda abierto** con el motivo: si se cerrara, quien administra
+veria un toast y creeria que se guardó.
+
+### 5. Keyset por `(full_name, id)` y correo buscado con `service_role`
+
+**Contexto.** `profiles` no tiene indice por nombre, y el correo vive en
+`auth.users`, fuera del alcance de la RLS del usuario.
+
+**Decision.** Paginacion keyset como en la Fase 7 (ADR-014), con cursor
+`base64url(nombre)|uuid` y `LIMITO+1`. La busqueda por nombre usa `ilike` con
+comillas y escapes (mismo problema de sintaxis de PostgREST que en
+`history.ts`); la busqueda por correo pagina `auth.admin.listUsers` con
+`service_role` hasta tres paginas de 200.
+
+**Consecuencia aceptada.** El recorrido de correos tiene un techo operativo de
+600 usuarios y no es una busqueda por indice. Con el volumen de una tienda sobra.
+Si algun dia no, el orden es: indice `profiles_full_name_id_idx on
+public.profiles (full_name, id)` primero, y una tabla espejo de correos despues.
+
+### 6. `logAudit` solo en el reset de contrasena
+
+**Decision.** Es la unica escritura de la fase que la base no ve (`admin.auth.
+updateUserById` no dispara ningun trigger de `fn_audit`), asi que es la unica
+que llama a `logAudit` con `accion: 'cambio_password'` (misma regla que
+ADR-015). `profiles` y `user_roles` ya se auditan solos; a~adir `logAudit` alla
+duplicaria la fila.
+
+La contrasena no entra en la bitacora ni en la consola: solo el nombre de quien
+la cambio y el id del usuario afectado.
+
+---
+
+## ADR-017 · Fase 11: el campo ausente es `undefined`, y la foto sobrevive al reenvio
+
+### 1. Causa del bug: faltaba `.optional()` en los helpers numericos
+
+**Sintoma.** Registrar una entrada de un producto en modo `cantidad` (el caso
+reportado con ACEITE, unidad `l`) fallaba siempre con
+`invalid_type` / "Ingresa un numero valido" sobre `peso_kg`. Un campo que la
+persona no ve, con un error que no puede corregir.
+
+**Causa.** `numeroOpcional` y `numeroPositivo` de `lib/validation/movements.ts`
+eran `z.preprocess(vacioAUndefined, z.coerce.number()...)` **sin `.optional()`**.
+La cadena era:
+
+1. El formulario solo dibuja el input de peso si el producto es de modo `peso`,
+   asi que para ACEITE el campo no existe en el DOM.
+2. `texto(formData, 'peso_kg')` devuelve `""` cuando el campo no esta.
+3. `vacioAUndefined("")` produce `undefined` (correcto).
+4. Pero `z.coerce.number()` coercea `undefined` a `NaN`.
+5. El `.refine(Number.isFinite)` lo rechaza con `invalid_type`.
+
+El `.optional()` que faltaba impedia que el paso 3 sirviera de algo. El
+`superRefine` de la misma funcion ya comparaba contra `undefined`
+(`datos.cantidad === undefined`), o sea que la intencion era correcta y la
+implementacion no.
+
+**Decision.** `.optional()` despues del ultimo `.refine` en ambos helpers. Se
+documenta con el porque en el propio codigo, porque el orden de las dos cosas
+importa y un futuro `.optional()` colocado antes del `refine` volveria a
+cambiar el significado.
+
+**Por que el bug nunca salio antes.** Afectaba a los **dos** modos: cualquier
+movimiento de un producto controlado por cantidad fallaba por `peso_kg`, y
+cualquier movimiento de uno controlado por peso fallaba por `cantidad`. Es decir,
+el camino de captura de la app —su funcion principal— no podia completarse para
+ningun producto. Salio en la Fase 11 porque es la primera vez que se registraba
+un movimiento de verdad desde la app.
+
+### 2. La regla por tipo de unidad no cabe en el esquema
+
+El enunciado pide un `superRefine` que exija "el campo que corresponde al tipo de
+unidad del producto". El esquema **no puede** saberlo: el producto se elige en el
+formulario y solo existe en el servidor, y el esquema se ejecuta en los dos
+lados con la misma forma. Meter el `unidad_tipo` en el esquema obligaria a
+mandarlo en el FormData (y por tanto a que el cliente decidiera la regla, que es
+justo lo que no se quiere).
+
+**Decision.** Se reparte en las dos capas que ya existen:
+
+- `superRefine` decide lo que el FormData permite ver por si mismo: que no
+  falten los dos a la vez, que la cantidad no sea 0 o negativa fuera de un
+  ajuste, y que el peso sea mayor que 0 en cualquier tipo.
+- `validarValoresSegunModo(datos, control_mode)` decide que campo exige el
+  producto, y corre en el formulario (con la fila que ya tiene en memoria) y en
+  la accion (con la fila real). Un solo codigo, mismo mensaje en los dos lados.
+
+Se anadio ademas el `peso_kg <= 0` al `superRefine`: antes se colaba por la regla
+general de "no negativo" solo para `cantidad`, y un peso de 0 pasaba el esquema
+para ser rechazado mas tarde por la RPC.
+
+### 3. La foto se conserva reinyectando el `File`, no guardandolo en el servidor
+
+**Sintoma.** React resetea el formulario cuando termina una Server Action, y eso
+vacia el `<input type="file">`. Pero `PhotoInput` tiene su vista previa en estado
+de React, que **no** se reinicia: la pantalla seguia diciendo "Foto lista:
+ACEITE.jpg" con la imagen al lado mientras el segundo envio llegaba sin foto.
+
+Eso es peor que perderla. No es una molestia: es una promesa falsa sobre un campo
+**obligatorio**. Quien lo ve pense que la foto iba a ir y el movimiento se
+registra sin ella, o falla de nuevo por un motivo que no entiende.
+
+**Alternativas descartadas.**
+
+- *Subir la foto antes de validar.* Duplica el trabajo: el movimiento se puede
+  rechazar despues (stock insuficiente, producto desactivado) y habria que
+  borrar un archivo huerfano, sin RPC que lo haga.
+- *Recordar solo "habia una foto".* No se puede: un `<input type="file">` es el
+  unico control que el navegador prohibe rellenar por script, precisamente para
+  que una pagina no pueda leer un archivo que la persona no eligio. Por eso el
+  unico camino es un `DataTransfer` con el `File` que ya esta en memoria.
+
+**Decision.** `PhotoInput` guarda el `File` en un ref y, cuando la accion
+responde, comprueba si el input quedo vacio; si es asi, lo reinyecta. Si el
+`DataTransfer` no estuviera disponible, no se finge: se avisa al formulario padre
+(`onCambia(null)`) y el texto pasa a "Vuelve a adjuntar la foto". Prefiere
+molestar a mentir.
+
+El exito redirige, asi que el componente se desmonta y la reinyeccion solo ocurre
+en el camino del fallo: no hace falta coordination extra con el exito.
+
+---
+
+## ADR-018 · Fase 11: que se escribe en la consola, y por que
+
+**Contexto.** Las fases anteriores dejaron `console.log` de diagnostico puestos
+para depurar: uno por request en el middleware, el contexto de permisos completo
+en cada carga de pagina, y el volcado completo de los issues de Zod en cada
+intento fallido. Los tres se retiredaron con `/diag` y sus paginas.
+
+**Decision.** La consola no es un canal de auditoria: es un canal de
+incidentes. Se escribe solo cuando **paso algo que no es el camino normal** y
+que no deja otra traza.
+
+**Que se quita.**
+
+- El camino feliz del RBAC (`[guards] contexto OK`, `[middleware] uid: ...`).
+  Una linea por peticion no informa de nada: el middleware corre en todas las
+  peticiones, asi que esto era ruido puro y el mas caro de los tres.
+- Estados **normales**: sin sesion, perfil inactivo, usuario sin rol. El logout
+  existe y un usuario sin rol es una situacion valida de la que el middleware ya
+  se ocupa mandando a `/no-autorizado`. La bitacora guarda `login` y `logout` en
+  `audit_logs`; la consola solo duplicaria lo que ya esta escrito.
+- La validacion fallida (`[movimientos] issues: ...`). Un rechazo de Zod es lo que
+  pasa cuando alguien escribe mal un campo, no un incidente. Volcar el array
+  entero generaba una linea por cada intento fallido de todos los usuarios.
+
+**Que se queda, y por que.**
+
+- **Fallo de lectura de `user_roles`, `roles` o `role_permissions`.** El guard
+  falla cerrado: si esas tablas no se pueden leer, `getAuthContext()` devuelve
+  `null` y TODOS los usuarios salen de la app sin causa visible. Sin esta linea
+  el sintoma es "la aplicacion no deja entrar a nadie" y no hay nada en ninguna
+  parte que lo explique.
+- **Denegacion de permiso.** Es un evento de seguridad. La RPC `log_audit` cubre
+  las Server Actions, pero la redireccion del middleware y de las paginas no pasa
+  por ella: sin esta linea, un intento de entrar donde no se puede no deja
+  registro. `requirePermission` y `requirePagePermission` escriben la misma forma
+  a traves de `registrarDenegacion`, con `via: 'accion' | 'pagina'`, para que el
+  mismo evento no salga con dos redacciones distintas.
+- **Zod que falla sin ningun campo** (`Object.keys(fields).length === 0`). Es el
+  unico caso en que la UI solo puede pintar "no se pudo validar"; el mensaje en
+  pantalla no dice por que, asi que la consola es el sitio donde averiguarlo.
+
+Todo lo demas que la app escribe en el servidor sigue siendo `console.error` en la
+operacion que fallo (RPC, Storage, migraciones), que es donde se busca cuando
+algo se rompe. La trazabilidad de quien hizo que es `audit_logs`, y no se toca.
+
+---
+
+## ADR-019 · Fase 12: la foto del movimiento nunca llego al bucket
+
+### 1. Sintoma
+
+El movimiento `#000001` (entrada de ACEITE, 20 l) quedo registrado **sin foto**,
+con `require_movement_photo = true`. El aviso que salia al volver al inicio era
+literalmente:
+
+> No se pudo subir la foto al almacenamiento: new row violates row-level security policy
+
+Es decir: la puerta de obligatoriedad si se disparo, la RPC si escribio el
+movimiento, y lo que fallo fue el `INSERT` del objeto en `storage.objects`.
+
+### 2. La desalineacion exacta: dos convenciones de ruta, dos prefijos distintos
+
+El bug era una confusion entre lo que Storage guarda y lo que la tabla guarda:
+
+| Donde | Que se guarda | Ejemplo |
+|---|---|---|
+| `storage.objects.name` | **Sin** el bucket | `<movement_id>/<archivo>` |
+| `public.photos.path` | **Con** el bucket | `movement-photos/<movement_id>/<archivo>` |
+
+`supabase.storage.from(bucket)` ya apunta al bucket, asi que el `path` que se le
+pasa es **relativo a el**: eso es lo que queda en `name`. La segunda forma la
+impone el CHECK `photos_path_movimiento` (migracion 01), que exige
+`split_part(path,'/',1) = 'movement-photos'` y 36 caracteres en el segmento 2,
+y es lo que hace unico el path dentro de un bucket privado. De ahi
+`public.photo_object_path()`, que existe para quitar el prefijo.
+
+La policy `movement_photos_insert` (migracion 05) leia el movimiento de
+`(storage.foldername(name))[1]`. `adjuntarFotoMovimiento()` en cambio construia
+la ruta con el bucket dentro, de modo que el nombre real del objeto era
+`movement-photos/<movement_id>/<archivo>`, `foldername(name)[1]` devolvia la
+cadena `"movement-photos"` y el `exists (... where m.id::text = 'movement-photos')`
+era falso. De ahi el 403.
+
+Comprobado en runtime con `npm run check:storage` (token real de la API de Auth
+y cliente de sesion):
+
+```
+upload('movement-photos/<mid>/prueba.png') -> 403 new row violates row-level security policy
+upload('<mid>/prueba.png')                 -> 201 objeto creado
+remove('<mid>/prueba.png')                 -> borrado (mismo cliente de sesion)
+```
+
+**Decision.** Las dos convenciones se definen en un solo sitio del codigo,
+`lib/storage/foto-paths.ts`: `pathDeFoto()` para la columna y
+`objectPathDeFoto()` para el bucket, mas `objectPathDesdePath()` para firmar.
+Ningun modulo vuelve a armar la ruta con concatenacion propia.
+
+### 3. Lo que NO era la causa (descartado una vez, medido y no por suposicion)
+
+- **`owner` / `owner_id` de `storage.objects`.** Ninguna policy de la 05 los
+  menciona. La de DELETE usa `public.photos.created_by`, que es la autoria real
+  que registra la app. Supabase rellena `owner_id` con `auth.uid()` en un trigger
+  (`objects_update_owner`) y solo si la sesion es `authenticated`: por eso la
+  subida va con el cliente de sesion.
+- **`service_role`.** No estaba en juego: la subida ya usaba `createClient()` de
+  `@/lib/supabase/server` (cookies de sesion). Aun asi se fijo como regla, porque
+  con la service_role la RLS se salta entera (`BYPASSRLS`), `auth.uid()` seria
+  null y el objeto quedaria sin dueno: la foto entraria sin que nadie figure
+  como autor. La migracion 14 hace explicito el requisito con
+  `(select auth.uid()) is not null` en la policy de INSERT.
+- **`has_permission()` como security invoker o definer.** Es `security definer`
+  (migracion 02) para evitar la recursion de RLS al leer `user_roles`, y el
+  `grant execute ... to authenticated` de la 04 lo cubre. Devolvia `true`
+  correctamente: el movimiento entro por la RPC y la foto se rejectsolo por la
+  ruta.
+- **El bucket.** Existia, privado y con los limites correctos (si no hubiera
+  existido, el mensaje habria sido "Bucket not found"; `adjuntarFotoMovimiento`
+  distingue ese caso a proposito).
+
+### 4. Segundo bug con la misma raiz: la foto no se veia aunque subiera
+
+`listFotosDelMovimiento()` firmaba `createSignedUrl(foto.path, 120)` con el
+path tal cual, o sea **con** el bucket dentro. Aunque la subida hubiera
+funcionado, la URL firmada apuntaria a
+`movement-photos/movement-photos/<mid>/<archivo>`, un objeto que no existe. Se
+arregla con el mismo helper: `objectPathDesdePath(foto.path)`.
+
+### 5. Decision sobre la base: migracion 14, sin tocar la 05
+
+La 05 ya esta aplicada en el proyecto y sus policies son correctas respecto a la
+convencion. Editarla no cambiaria nada en los proyectos que ya la aplicaron, asi
+que el arreglo va en una migracion nueva e idempotente
+(`supabase/migrations/20260101001300_14_storage_policies_fix.sql`) que:
+
+1. Crea `public.movement_id_de_foto(text)`: resuelve el movimiento desde el
+   nombre en un solo lugar, rechaza por forma la variante con el bucket dentro y
+   valida que el primer segmento sea un UUID **antes** de castear (un `::uuid`
+   sobre un texto invalido, dentro de una policy, sale como error 500 y no como
+   403). Con `grant execute ... to authenticated`: las policies se evaluan con
+   los privilegios de quien las invoca, y la migracion 04 revoco `execute` a
+   `public` a proposito.
+2. Recrea las tres policies sobre ese helper, **con los mismos permisos que
+   tenian**. No se abre nada: ni UPDATE, ni escritura para `anon`, ni lectura
+   fuera de `photos:read` + `movements:read`.
+3. Avisa (no borra) si quedaran objetos con la forma antigua. En este proyecto
+   no hay ninguno: el bucket esta vacio, porque el `INSERT` rechazado no deja
+   objeto.
+
+La convencion canonica queda siendo `<movement_id>/<archivo>` para el objeto y
+`movement-photos/<movement_id>/<archivo>` para la fila. Aceptar las dos formas en
+la policy habria dejado el layout ambiguo, que es como se produjo el bug.
+
+### 6. Readjuntar la foto: decision de producto
+
+Un movimiento es append-only (ADR-003) y la foto se sube **despues** de
+registrarlo (la policy exige que el movimiento exista). Eso abre una ventana en
+la que el movimiento queda escrito sin foto, y la foto es obligatoria: sin una
+salida, la unica forma de cumplir la regla era registrar otro movimiento y
+anular este. Eso es un castigo desproporcionado por un fallo de red o de
+permisos.
+
+**Decision.** El detalle del movimiento ofrece **"Adjuntar foto"** cuando el
+movimiento no tiene ninguna (`fotos_count === 0`), no esta anulado y el usuario
+tiene `photos:write` + `movements:write`, que es exactamente lo que exige la
+policy de INSERT. Es un camino de recuperacion, no una segunda via de captura:
+no aparece en los que ya tienen foto, y un movimiento anulado no admite fotos.
+
+La clave de idempotencia es un `randomUUID()` nuevo en cada intento, al
+contrario del formulario de registro: alliprotege del doble toque; aqui dos
+pulsaciones deben crear dos fotos, no pelearse por el mismo objeto.
+
+El boton no borra ni sustituye: la policy no tiene UPDATE y asi sigue.
+
+### 7. El mensaje de error, que es lo que mas caro salio
+
+`new row violates row-level security policy` se muestra ahora traduzido
+("la causa mas probable es que el movimiento ya no exista o este anulado") y el
+aviso de "movimiento registrado sin foto" dice que se puede readjuntar desde el
+detalle. La regla de ADR-018 se mantiene: la consola sigue teniendo el error
+real; lo que cambia es que la pantalla deja de pedirle a quien lee que traduzca
+un nombre de constraint.
+
+### 8. Como se verifica
+
+`npm run check:storage` (antes `scripts/storage-check.mjs`, escrito sin
+dependencias): pide un token real a la API de Auth y recorre el camino completo
+—subir, firmar, registrar la fila, leerla, borrarla y borrar el objeto— con el
+cliente de sesion, y lista el bucket con `service_role` para confirmar que no
+queda nada. Resultado en la base real: **9 PASS, 0 FAIL, 0 WARN**, 0 objetos y 0
+filas al terminar.
+
+Es la prueba que faltaba en la 1.2 de `PRUEBAS-FINALES.md`, donde no habia forma
+de ejecutar SQL contra Postgres: para el bucket de fotos no hace falta, porque la
+API de Storage evalua las mismas policies que la base y lo hace con el mismo
+`auth.uid()` del JWT.

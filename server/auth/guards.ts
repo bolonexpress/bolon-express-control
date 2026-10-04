@@ -26,8 +26,19 @@ export type AuthContext = {
  * Ante cualquier duda (sin sesion, perfil ilegible, usuario inactivo) falla
  * cerrado: devuelve null.
  *
- * ⚠️ TEMPORAL: los `console.log` de este archivo son de diagnostico. Quitar en
- * la Fase 11 (ver /diag/permisos).
+ * Logs (Fase 11). Este archivo solo escribe cuando PASO ALGO QUE NO ES NORMAL:
+ *   - No se registra el camino feliz. Por request seria una linea por
+ *     navegacion, y `getAuthContext` se memoiza pero aun asi se ejecuta en cada
+ *     peticion nueva.
+ *   - Sin sesion o perfil inactivo son estados NORMALES (el logout existe), no
+ *     incidentes: no van a la consola. La bitacora ya guarda los `login` y
+ *     `logout` en `audit_logs`.
+ *   - Si una lectura de `user_roles` / `roles` / `role_permissions` falla, el
+ *     guard devuelve `null` y TODOS los usuarios salen de la app sin motivo
+ *     visible. Eso si es un incidente y queda en `console.error` (ADR-018).
+ *   - Una denegacion de permiso si se registra: es un evento de seguridad, y la
+ *     redireccion del middleware no pasa por la RPC `log_audit`, asi que no hay
+ *     copia en la bitacora (ADR-018).
  */
 export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
   const supabase = await createClient();
@@ -37,12 +48,7 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
     error: userError,
   } = await supabase.auth.getUser();
 
-  if (userError || !user) {
-    console.log('[guards] RECHAZA: sin sesion valida', {
-      userError: userError?.message ?? null,
-    });
-    return null;
-  }
+  if (userError || !user) return null;
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
@@ -50,15 +56,7 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
     .eq('id', user.id)
     .maybeSingle();
 
-  if (profileError || !profile || !profile.is_active) {
-    console.log('[guards] RECHAZA: perfil ilegible o inactivo', {
-      uid: user.id,
-      hayPerfil: Boolean(profile),
-      profileError: profileError?.message ?? null,
-      is_active: profile?.is_active ?? null,
-    });
-    return null;
-  }
+  if (profileError || !profile || !profile.is_active) return null;
 
   const { data: roleLinks, error: rolesError } = await supabase
     .from('user_roles')
@@ -66,16 +64,19 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
     .eq('user_id', user.id);
 
   if (rolesError) {
-    console.log('[guards] RECHAZA: no se pudo leer user_roles', {
+    // Falla cerrada: sin roles no se concede nada. El motivo va a consola
+    // porque, sin el, el sintoma es "la app no deja entrar a nadie".
+    console.error('[guards] no se pudo leer user_roles: se deniega todo', {
       uid: user.id,
-      error: rolesError.message,
+      motivo: rolesError.message,
     });
     return null;
   }
 
   const roleIds = (roleLinks ?? []).map((link) => link.role_id);
   if (roleIds.length === 0) {
-    console.log('[guards] AVISO: usuario sin ningun rol', { uid: user.id });
+    // Usuario sin rol: estado valido (se crea antes de asignarlo). El
+    // middleware lo manda a /no-autorizado; no es un fallo.
     return { user, profile, roleKeys: [], permissions: [] };
   }
 
@@ -85,7 +86,7 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
   ]);
 
   if (rolesResult.error || permissionsResult.error) {
-    console.log('[guards] RECHAZA: no se pudieron leer roles/role_permissions', {
+    console.error('[guards] no se pudieron leer roles/role_permissions: se deniega todo', {
       uid: user.id,
       rolesError: rolesResult.error?.message ?? null,
       permissionsError: permissionsResult.error?.message ?? null,
@@ -96,16 +97,27 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
   const roleKeys = (rolesResult.data ?? []).map((row) => row.key);
   const permissions = (permissionsResult.data ?? []).map((row) => row.permission_key);
 
-  console.log(
-    '[guards] contexto OK',
-    { uid: user.id, roles: roleKeys, permisos: permissions },
-    roleKeys.includes('admin')
-      ? '(admin: acceso total por atajo, sin mirar el array)'
-      : '',
-  );
-
   return { user, profile, roleKeys, permissions };
 });
+
+/**
+ * Una sola linea por denegacion, para que `requirePermission` (acciones) y
+ * `requirePagePermission` (paginas) no escriban el mismo evento dos veces con
+ * redaccion distinta.
+ */
+function registrarDenegacion(
+  contexto: AuthContext,
+  permission: string,
+  via: 'accion' | 'pagina',
+): void {
+  console.error('[guards] acceso denegado', {
+    uid: contexto.user.id,
+    via,
+    pedido: permission,
+    roles: contexto.roleKeys,
+    motivo: contexto.roleKeys.length === 0 ? 'sin_rol' : 'permiso_no_concedido',
+  });
+}
 
 /**
  * `admin` tiene acceso total por diseno (misma excepcion que
@@ -131,14 +143,7 @@ export async function requireAuthContext(): Promise<AuthContext> {
 export async function requirePermission(permission: string): Promise<AuthContext> {
   const context = await requireAuthContext();
   if (!contextHasPermission(context, permission)) {
-    // Por que se rechaza exactamente: rol ausente vs permiso no concedido.
-    console.log('[guards] RECHAZA PERMISO', {
-      uid: context.user.id,
-     roles: context.roleKeys,
-      pedido: permission,
-      motivo: context.roleKeys.length === 0 ? 'sin_rol' : 'permiso_no_concedido',
-      concedidos: context.permissions,
-    });
+    registrarDenegacion(context, permission, 'accion');
     throw new ForbiddenError(permission);
   }
   return context;
@@ -147,22 +152,16 @@ export async function requirePermission(permission: string): Promise<AuthContext
 /** Guard para paginas: redirige en lugar de lanzar excepcion. */
 export async function requirePageContext(): Promise<AuthContext> {
   const context = await getAuthContext();
-  if (!context) {
-    console.log('[guards] PAGINA -> redirect(/login): sin contexto');
-    redirect('/login');
-  }
+  // Sin contexto no hay nada que registrar: no hay uid. La bitacora ya guarda
+  // los accesos correctos y el fallo del login queda en el propio login.
+  if (!context) redirect('/login');
   return context;
 }
 
 export async function requirePagePermission(permission: string): Promise<AuthContext> {
   const context = await requirePageContext();
   if (!contextHasPermission(context, permission)) {
-    console.log('[guards] PAGINA -> redirect(/no-autorizado)', {
-      uid: context.user.id,
-      roles: context.roleKeys,
-      pedido: permission,
-      motivo: context.roleKeys.length === 0 ? 'sin_rol' : 'permiso_no_concedido',
-    });
+    registrarDenegacion(context, permission, 'pagina');
     redirect('/no-autorizado');
   }
   return context;

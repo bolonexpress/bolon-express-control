@@ -12,6 +12,7 @@ import {
   IconLista,
   IconRegla,
   IconReloj,
+  IconPersona,
   IconVer,
 } from '@/components/ui/icons';
 import { createClient } from '@/lib/supabase/server';
@@ -50,6 +51,7 @@ export default async function HomePage() {
   const veCompras = contextHasPermission(context, PERMISOS.shoppingRead);
   const veHistorial = contextHasPermission(context, PERMISOS.historyRead);
   const veAuditoria = contextHasPermission(context, PERMISOS.auditRead);
+  const vePersonas = contextHasPermission(context, PERMISOS.usersManage);
 
   const ultimoIngreso = context.profile.last_seen_at
     ? new Date(context.profile.last_seen_at).toLocaleString('es', {
@@ -115,6 +117,9 @@ export default async function HomePage() {
       : []),
     ...(veHistorial
       ? [{ href: '/historial', label: 'Historial', ayuda: 'Movimientos con filtros y fotos', icono: <IconReloj size={24} /> }]
+      : []),
+    ...(vePersonas
+      ? [{ href: '/admin/usuarios', label: 'Personas', ayuda: 'Quién entra y qué puede hacer', icono: <IconPersona size={24} /> }]
       : []),
     ...(veAuditoria
       ? [{ href: '/admin/auditoria', label: 'Auditoría', ayuda: 'Bitácora con antes ↔ después', icono: <IconEscudo size={24} /> }]

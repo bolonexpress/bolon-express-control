@@ -11,13 +11,7 @@ const NO_AUTORIZADO_PATH = '/no-autorizado';
  * permisos fuera redirigido a una de ellas y esa ruta tambien exigiera
  * permisos, el ciclo no tendria salida.
  */
-const EXENTAS_PERMISOS = new Set([
-  LOGIN_PATH,
-  FORCE_PASSWORD_PATH,
-  NO_AUTORIZADO_PATH,
-  '/diag',
-  '/diag/permisos',
-]);
+const EXENTAS_PERMISOS = new Set([LOGIN_PATH, FORCE_PASSWORD_PATH, NO_AUTORIZADO_PATH]);
 
 /**
  * Protege TODAS las rutas de la aplicacion salvo /login.
@@ -99,16 +93,16 @@ export async function middleware(request: NextRequest) {
   }
 
   // -------------------------------------------------------------------------
-  // ⚠️ LOGS DE DIAGNOSTICO + filtro de permisos.
-  // Temporal: se repite en cada request. Quitar tras diagnosticar (Fase 11).
+  // Filtro de permisos.
   //
-  // Coste real: son 3 consultas extra POR REQUEST en el middleware, que corre
-  // en todas las peticiones. En una maquina con poca RAM eso se nota.
+  // Son 3 consultas extra POR REQUEST y el middleware corre en todas las
+  // peticiones, asi que no se puede subir el numero. Se deja como esta: la
+  // autoridad real es `requirePagePermission` / `requirePermission`, que cada
+  // pagina y cada Server Action vuelven a ejecutar. Esto solo evita que un
+  // usuario sin permisos llegue a un shell vacio.
   //
-  // El filtro NO es la autoridad de seguridad: cada pagina y cada Server Action
-  // vuelven a validar con `requirePagePermission` / `requirePermission`, que es
-  // lo que decide de verdad. Esto solo evita que un usuario sin permisos llegue
-  // a un shell vacio.
+  // Sin logs: el diagnostico por request se elimino en la Fase 11. Para auditar
+  // quien entro y salio esta la bitacora (`audit_logs`), no la consola.
   // -------------------------------------------------------------------------
   const { data: roleLinks } = await supabase
     .from('user_roles')
@@ -133,9 +127,7 @@ export async function middleware(request: NextRequest) {
   // `has_permission()` en la base y que `contextHasPermission` en los guards).
   // El atajo se replica aqui para no expulsar a un administrador legitimo.
   const esAdmin = roleKeys.includes('admin');
-  const permisosEfectivos = esAdmin ? ['admin:*'] : permisos;
 
-  console.log('[middleware] uid:', user.id, 'permisos:', permisosEfectivos, 'roles:', roleKeys);
   // -------------------------------------------------------------------------
 
   if (perfil.force_password_change && pathname !== FORCE_PASSWORD_PATH) {
@@ -144,10 +136,7 @@ export async function middleware(request: NextRequest) {
 
   // Sin rol, o con rol pero sin un solo permiso, no entra al area de la app:
   // va a /no-autorizado (no a /login, que sugeriria que la sesion fallo).
-  const esRutaDiag = pathname === '/diag' || pathname.startsWith('/diag/');
-  const exigePermisos = !esRutaDiag && !EXENTAS_PERMISOS.has(pathname);
-
-  if (exigePermisos && !esAdmin && permisos.length === 0) {
+  if (!EXENTAS_PERMISOS.has(pathname) && !esAdmin && permisos.length === 0) {
     const target = new URL(NO_AUTORIZADO_PATH, request.url);
     target.searchParams.set('motivo', 'sin_permisos');
     return redirectTo(target);
@@ -159,20 +148,14 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Todo menos los assets estaticos de Next, los ficheros publicos y
-     * `/diag`.
+     * Todo menos los assets estaticos de Next, los ficheros publicos y las
+     * imagenes.
      *
-     * `diag(?:/|$)` EXCLUYE la ruta de diagnostico del matcher: el lookahead
-     * evaluado justo despues de la "/" inicial ya no coincide con `/diag`
-     * (ni con `/diag/...`), asi que el middleware no se ejecuta para ella.
-     * El patron ancla en `(?:`/`$)` a proposito, para no capturar por
-     * accidente rutas futuras que solo empiecen por "diag".
+     * `.*\\.(?:svg|png|...)$` excluye los ficheros con extension para que el
+     * middleware no corra en cada foto de Supabase Storage.
      *
-     * ⚠️ DIAGNOSTICO TEMPORAL: `diag` debe desaparecer del matcher en la
-     * FASE 11 (limpieza), junto con `app/diag/page.tsx` y
-     * `app/diag/permisos/page.tsx`. Sin esta excepcion, /diag redirigiria a
-     * /login y no serviria para diagnosticar nada.
+     * La excepcion de `/diag` (Fase 11) se elimino junto con sus paginas.
      */
-    '/((?!_next/static|_next/image|favicon.ico|diag(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|txt|xml)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|txt|xml)$).*)',
   ],
 };

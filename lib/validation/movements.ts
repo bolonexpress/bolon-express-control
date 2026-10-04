@@ -21,22 +21,43 @@ const MAX_CANTIDAD = 99_999_999_999.999;
 const vacioAUndefined = (valor: unknown) =>
   typeof valor === 'string' && valor.trim() === '' ? undefined : valor;
 
-/** Numero opcional: "" -> undefined, "3,5" y "3.5" -> 3.5. */
+/**
+ * Numero opcional: "" o ausente -> undefined, "3.5" -> 3.5.
+ *
+ * Solo punto decimal: los campos son `<input type="number">`, que ya normaliza
+ * a punto lo que el teclado del telefono mande. Una coma se rechazaria, y con
+ * razon: aceptarla exigiria distinguirla del separador de miles.
+ *
+ * El `.optional()` NO es cosmetico y va DESPUES del `.refine`: `vacioAUndefined`
+ * convierte el "" en `undefined`, pero si el esquema no lo acepta, `z.coerce.number()`
+ * sigue coerceando `undefined` a `NaN` y el `refine` lo rechaza con
+ * "Ingresa un numero valido". Ese fue el bug que impidio registrar movimientos
+ * de productos en modo `cantidad`: el formulario no dibuja el campo de peso, el
+ * FormData llega sin el, y `texto()` devuelve "" -> NaN -> rechazo con
+ * `invalid_type` sobre un campo que el usuario jamas ve (ver ADR-017).
+ */
 const numeroOpcional = z.preprocess(
   vacioAUndefined,
   z.coerce
     .number({ invalid_type_error: 'Ingresa un número válido' })
     .refine((n) => Number.isFinite(n), 'Ingresa un número válido')
-    .refine((n) => Math.abs(n) <= MAX_CANTIDAD, 'Valor demasiado grande'),
+    .refine((n) => Math.abs(n) <= MAX_CANTIDAD, 'Valor demasiado grande')
+    .optional(),
 );
 
+/**
+ * Numero positivo opcional: "" o ausente -> undefined.
+ *
+ * Mismo `.optional()` y mismo motivo que en `numeroOpcional` (ADR-017).
+ */
 const numeroPositivo = z.preprocess(
   vacioAUndefined,
   z.coerce
     .number({ invalid_type_error: 'Ingresa un número válido' })
     .refine((n) => Number.isFinite(n), 'Ingresa un número válido')
     .refine((n) => n > 0, 'Debe ser mayor que 0')
-    .refine((n) => n <= MAX_CANTIDAD, 'Valor demasiado grande'),
+    .refine((n) => n <= MAX_CANTIDAD, 'Valor demasiado grande')
+    .optional(),
 );
 
 const textoOpcional = (max: number, mensaje: string) =>
@@ -81,6 +102,17 @@ export const CAMPO_FORMULARIO = '_form';
  * El signo lo pone el `tipo`: la RPC lo aplica sobre `delta_cantidad`. En un
  * ajuste el usuario escribe el valor ya con signo (+aumenta, -reduce).
  */
+/**
+ * Reglas del esquema, independientes del producto.
+ *
+ * La regla "este producto se controla por peso, entonces pide `peso_kg`" NO puede
+ * vivir aqui: el esquema no sabe que producto se eligio. Se aplica en
+ * `validarValoresSegunModo`, que corre en el formulario (con la fila que ya tiene
+ * en memoria) y en el servidor (con la fila real). Aqui solo se puede comprobar
+ * lo que el propio FormData dice, y por eso el campo ausente se acepta: que falte
+ * el peso solo es un error si el producto no se controla por peso, y eso se decide
+ * despues (ADR-017).
+ */
 export const registrarMovimientoSchema = z
   .object({
     tipo: z.enum(MOVIMIENTO_TIPO, { message: 'Tipo de movimiento no válido' }),
@@ -109,6 +141,9 @@ export const registrarMovimientoSchema = z
       return;
     }
 
+    // En un ajuste se admiten negativos (restar stock). En los demas tipos no:
+    // el signo lo pone `delta_cantidad`, y un "-3" en una entrada seria una
+    // salida disfrazada. El peso no admite negativos en ningun caso.
     if (datos.cantidad !== undefined) {
       if (!esAjuste && datos.cantidad <= 0) {
         ctx.addIssue({
@@ -124,6 +159,14 @@ export const registrarMovimientoSchema = z
           message: 'En un ajuste la cantidad no puede ser 0',
         });
       }
+    }
+
+    if (datos.peso_kg !== undefined && datos.peso_kg <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['peso_kg'],
+        message: 'El peso debe ser mayor que 0',
+      });
     }
   });
 

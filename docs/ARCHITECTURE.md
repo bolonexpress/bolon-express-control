@@ -268,7 +268,11 @@ completo. Los ítems generados por alerta de stock mínimo se marcan
 | 6 | Lista de compras + historial + realtime | Completada (pendiente aprobación) |
 | 7 | Historial con filtros y paginación (`/historial`) | Completada (pendiente aprobación) |
 | 8 | Auditoría y revisión de seguridad (`/admin/auditoria`, `scripts/security-audit.mjs`) | Completada (pendiente aprobación) |
-| 9 | Administración (usuarios, roles, `app_config`) | Pendiente |
-| 10 | Dashboard, alertas, reportes, exportación, PWA offline-read | Pendiente |
+| 9 | Rediseño UI/UX, accesibilidad y branding | Completada (pendiente aprobación) |
+| 10 | Administración de usuarios (`/admin/usuarios`, `/nuevo`, `/[id]`, `users:manage`) | Completada (pendiente aprobación) |
+| 11 | Bug de movimientos (`peso_kg` NaN), persistencia de la foto, limpieza (`/diag`, logs de debug) | Completada (pendiente aprobación) |
+| 12 | Pruebas finales con datos reales (`docs/PRUEBAS-FINALES.md`) | En curso |
+| 13 | Despliegue | Pendiente |
 
-Cada fase requiere **aprobación explícita** antes de iniciar la siguiente.
+Cada fase requiere **aprobación explícita** antes de iniciar la siguiente. La
+numeración sigue a `README.md` §Fases, que es el plan vigente.

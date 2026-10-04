@@ -1,5 +1,7 @@
 'use server';
 
+import { randomUUID } from 'node:crypto';
+
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import type { z } from 'zod';
@@ -20,6 +22,7 @@ import {
   adjuntarFotoMovimiento,
   anularMovimiento,
   getConfigMovimientos,
+  getMovimiento,
   getProductoOperable,
   registrarMovimiento,
 } from '@/server/repositories/movements';
@@ -46,6 +49,8 @@ import type { EnumValue } from '@/types/database';
 
 const RUTA_LISTA = '/movimientos';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Datos minimos que el formulario necesita para pintar el stock disponible. */
 export type ProductoParaFormulario = {
   id: string;
@@ -68,6 +73,21 @@ export type StockActionResult = {
   producto: ProductoParaFormulario | null;
 };
 
+/**
+ * Traduce el rechazo de la policy de Storage a algo accionable.
+ *
+ * El 403 llega como `new row violates row-level security policy`, que no le dice
+ * nada a quien lo lee. En estos dos caminos la causa real casi siempre es la
+ * misma, y la policy la ha comprobado ya: el movimiento no existe o esta
+ * anulado. Se dice eso en vez de dejar el nombre de una constraint.
+ */
+function mensajeDeSubida(mensaje: string): string {
+  if (/row[- ]level security/i.test(mensaje)) {
+    return 'La base rechazó la foto. La causa mas probable es que el movimiento ya no exista o este anulado: recarga la pantalla para confirmarlo.';
+  }
+  return mensaje;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -88,17 +108,27 @@ function archivo(formData: FormData, campo: string): File | string {
  *
  * No se descarta ningun issue: los que no tienen `path` caen en
  * `CAMPO_FORMULARIO` y los `path` anidados se unen con '.', de modo que un
- * `fields` vacio solo es posible si `error.issues` lo esta. Cada fallo se
- * registra en el log del servidor porque el que aparece en pantalla es la
- * primera mensagem de cada campo y no deja rastro de las demas.
+ * `fields` vacio solo es posible si `error.issues` lo esta.
+ *
+ * **No se registra la validacion fallida** (Fase 11). Un rechazo de Zod es lo
+ * que pasa cuando alguien escribe mal un campo, no un incidente: volcar el
+ * `issues` entero en consola generaba una linea por cada intento fallido de
+ * todos los usuarios, y era el log que mas ruido producia. El mensaje que ve
+ * la persona ya es el correcto, campo a campo.
+ *
+ * Lo que si se registra es el caso anomalo: un `fields` VACIO significa que
+ * Zod fallo sin senal campo, algo que ningun formulario espera. Ahi la UI solo
+ * puede pintar "no se pudo validar", y sin esta linea nadie sabria por que.
  */
 function erroresDeZod(error: z.ZodError, accion: string): Record<string, string> {
-  console.log('[movimientos] issues:', error.issues, { accion });
-
   const fields: Record<string, string> = {};
   for (const issue of error.issues) {
     const campo = issue.path.length > 0 ? issue.path.map(String).join('.') : CAMPO_FORMULARIO;
     if (!(campo in fields)) fields[campo] = issue.message;
+  }
+
+  if (Object.keys(fields).length === 0) {
+    console.error('[movimientos] Zod fallo sin ningún campo', { accion, issues: error.issues });
   }
 
   return fields;
@@ -336,7 +366,7 @@ export async function registrarMovimientoAction(
           movimiento: resultado.data.codigo,
           motivo: adjunta.message,
         });
-        aviso = `Movimiento ${resultado.data.codigo} registrado, pero la foto no se pudo adjuntar: ${adjunta.message}`;
+        aviso = `Movimiento ${resultado.data.codigo} registrado, pero la foto no se pudo adjuntar: ${mensajeDeSubida(adjunta.message)}. Puedes readjuntarla desde el detalle del movimiento.`;
       }
     }
 
@@ -358,6 +388,110 @@ export async function registrarMovimientoAction(
   if (registro.aviso) parametros.set('aviso', registro.aviso);
 
   redirect(`${RUTA_LISTA}?${parametros.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Readjuntar foto a un movimiento ya registrado
+// ---------------------------------------------------------------------------
+
+/**
+ * Sube una foto a un movimiento EXISTENTE.
+ *
+ * Es el camino de recuperacion de `registrarMovimientoAction`: si la subida
+ * falla, el movimiento queda registrado (es append-only, no se toca) pero sin
+ * la foto que el negocio declara obligatoria. Sin esto habia que registrar un
+ * movimiento nuevo y anular el anterior solo para cumplir la regla de la foto
+ * (ADR-019).
+ *
+ * El movimiento se comprueba aqui para dar un mensaje util, pero la autoridad
+ * sigue siendo la policy de `storage.objects`: si el movimiento esta anulado o
+ * ya no existe, el `INSERT` se rechaza igual (por eso el mensaje del 403 se
+ * traduce en vez de tragarselo).
+ *
+ * La comprobacion previa lee `v_movimientos`, asi que necesita `movements:read`.
+ * El seed da `photos:write` y `movements:read` al mismo tiempo, asi que hoy
+ * siempre puede leer; si alguien configurara un rol con solo `photos:write`,
+ * el mensaje seria "El movimiento ya no existe" cuando en realidad es que no
+ * puede leerlo. Se acepta: la policy seguiria rechazando igual y el boton ya
+ * esta condicionado a los mismos permisos que ella.
+ *
+ * La subida usa el cliente de sesion de `createClient()`, nunca `service_role`.
+ */
+export async function adjuntarFotoMovimientoAction(
+  _estadoAnterior: CatalogActionState,
+  formData: FormData,
+): Promise<CatalogActionState> {
+  const contexto = await exigir(PERMISOS.photosWrite);
+  if (contexto === null || esFallo(contexto)) {
+    return contexto ?? fallo('sin_permiso', `Necesitas el permiso ${PERMISOS.photosWrite}.`);
+  }
+
+  const movementId = texto(formData, 'movementId');
+  const foto = archivo(formData, 'foto');
+
+  if (!UUID_RE.test(movementId)) {
+    return fallo('validacion', 'Movimiento no válido.', { movementId: 'Movimiento no válido.' });
+  }
+
+  if (!(foto instanceof File) || foto.size === 0) {
+    return fallo('foto', 'Elige la foto que quieres adjuntar.', {
+      foto: 'No se recibió el archivo. Vuelve a elegirlo.',
+    });
+  }
+
+  if (!esMimeDeFoto(foto.type)) {
+    return fallo('foto', 'La foto debe ser una imagen (JPEG, PNG, WebP o HEIC).', {
+      foto: 'Formato no admitido.',
+    });
+  }
+
+  try {
+    const config = await getConfigMovimientos();
+    const limite = Math.min(config.fotosMaxBytes, FOTO_MAX_BYTES);
+    if (foto.size > limite) {
+      return fallo('foto', 'La foto supera el tamaño máximo permitido.', {
+        foto: `Foto demasiado grande (máximo ${Math.round(limite / (1024 * 1024))} MB).`,
+      });
+    }
+
+    const movimiento = await getMovimiento(movementId);
+    if (!movimiento) {
+      return fallo('movimiento', 'El movimiento ya no existe.');
+    }
+    if (movimiento.anulacion_id) {
+      return fallo('movimiento', 'El movimiento está anulado: no admite fotos nuevas.');
+    }
+
+    // El nombre del objeto es una clave nueva cada intento. No se reutiliza la
+    // del formulario porque aqui no hay doble toque que proteger: pulsar dos
+    // veces "Adjuntar foto" tiene que crear dos fotos, no pelearse por la misma.
+    const adjunta = await adjuntarFotoMovimiento(
+      movementId,
+      randomUUID(),
+      foto,
+      contexto.user.id,
+    );
+
+    if (!adjunta.ok) {
+      console.error('[movimientos] no se pudo readjuntar la foto', {
+        movimiento: movimiento.codigo,
+        motivo: adjunta.message,
+      });
+      return fallo('foto', mensajeDeSubida(adjunta.message));
+    }
+
+    revalidatePath(`/movimientos/${movementId}`);
+    revalidatePath(RUTA_LISTA);
+    revalidatePath('/historial');
+
+    return {
+      ok: true,
+      data: { id: movementId, mensaje: `Foto adjuntada a ${movimiento.codigo}.` },
+    };
+  } catch (error) {
+    console.error('[movimientos] fallo inesperado al readjuntar la foto', error);
+    return fallo('inesperado', mensajeReal(error));
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -473,6 +473,7 @@ export function MovementForm({
             maxBytes={maxFotoBytes}
             error={errores.foto}
             onCambia={setFotoArchivo}
+            resultadoEnvio={estado}
           />
         </div>
       </div>
@@ -487,6 +488,12 @@ export function MovementForm({
           <div className="space-y-2">
             <label htmlFor="motivo" className="block text-base font-semibold text-texto">
               Motivo
+              {/* El motivo es obligatorio y la observación de abajo no. Se marca
+                  aqui, y no solo en el "?" de la cabecera, porque en este paso
+                  los dos campos se ven juntos y parecen igual de necesarios. */}
+              <span className="ml-2 rounded-lg bg-peligro-suave px-2 py-0.5 text-sm font-bold text-peligro ring-1 ring-peligro/25">
+                Obligatorio
+              </span>
             </label>
             <select
               id="motivo"
@@ -516,12 +523,13 @@ export function MovementForm({
           <div className="space-y-2">
             <label htmlFor="notes" className="block text-base font-semibold text-texto">
               Observaciones
+              <span className="ml-2 text-sm font-normal text-texto-suave">(opcional)</span>
             </label>
             <textarea
               id="notes"
               name="notes"
               rows={3}
-              placeholder="Algo que quieras recordar (no es obligatorio)"
+              placeholder="Algo que quieras recordar"
               aria-invalid={errores.notes ? true : undefined}
               className={inputClass}
             />
