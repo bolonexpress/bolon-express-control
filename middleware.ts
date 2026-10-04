@@ -44,6 +44,19 @@ export async function middleware(request: NextRequest) {
       return response;
     }
 
+    // Las rutas de API devuelven su propio 401 en vez de redirigir: un
+    // `fetch()` desde el navegador no puede seguir una redireccion a /login sin
+    // acabarparse el HTML de la pagina de acceso en lugar del JSON (Fase 12B,
+    // el visor de fotos). Aqui la sesion ya esta verificada como ausente, asi
+    // que responder 401 es lo honesto; la ruta vuelve a comprobarlo con
+    // `getUser()` por si el middleware se dejara fuera en algun momento.
+    if (pathname.startsWith('/api/')) {
+      return applySecurityHeaders(
+        NextResponse.json({ error: 'Sesión no válida.' }, { status: 401 }),
+        nonce,
+      );
+    }
+
     const target = new URL(LOGIN_PATH, request.url);
     if (pathname !== '/') {
       target.searchParams.set('next', `${pathname}${search}`);
@@ -77,6 +90,19 @@ export async function middleware(request: NextRequest) {
     }
 
     return redirectTo(new URL('/', request.url));
+  }
+
+  // Una ruta de API no es una pagina: no se redirige, se responde. La sesion
+  // existe, pero si el usuario esta inactivo o debe cambiar la clave, la ruta
+  // recibe 401 en vez de un HTML de otra pantalla (Fase 12B).
+  if (pathname.startsWith('/api/')) {
+    if (!perfil || !perfil.is_active || perfil.force_password_change) {
+      return applySecurityHeaders(
+        NextResponse.json({ error: 'Sesión no válida.' }, { status: 401 }),
+        nonce,
+      );
+    }
+    return response;
   }
 
   // Perfil no verificado: se deja pasar. Las Server Actions y los guards

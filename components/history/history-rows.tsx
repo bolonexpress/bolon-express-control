@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { BotonFoto } from '@/components/photos/photo-viewer';
 import { formatearCantidad } from '@/lib/format/units';
 import { MOVIMIENTO_MOTIVO_LABEL, MOVIMIENTO_TIPO_LABEL } from '@/types/domain';
 import type { HistorialRow } from '@/types/domain';
@@ -43,18 +44,20 @@ function Efecto({ m }: { m: HistorialRow }) {
  * servidor y tambien el boton "Cargar mas" del cliente, asi que aqui no se
  * importa nada de `server/`.
  *
- * El listado NUNCA firma fotos: solo muestra el conteo. La foto original solo
- * se genera en la pagina de detalle.
+ * El listado NUNCA carga las imagenes: solo el conteo (ADR-014, Fase 7). Lo que
+ * hace el conteo es abrir el VISOR (Fase 12B), que si pide y firma las fotos en
+ * ese momento: la decision de no gastar ancho de banda se mantiene, y aun asi
+ * la foto se puede ver en grande desde el listado.
  */
 export function HistorialTarjetas({ filas }: { filas: HistorialRow[] }) {
   return (
-    <ul className="space-y-3 sm:hidden">
+    <ul className="space-y-2 sm:hidden sm:space-y-3">
       {filas.map((m) => {
         const anulado = m.anulacion_id !== null;
         return (
           <li
             key={m.id}
-            className={`rounded-xl bg-superficie p-4 shadow-sm ring-1 ring-borde ${anulado ? 'opacity-75' : ''}`}
+            className={`rounded-xl bg-superficie p-3 shadow-sm ring-1 ring-borde sm:p-4 ${anulado ? 'opacity-75' : ''}`}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -92,13 +95,12 @@ export function HistorialTarjetas({ filas }: { filas: HistorialRow[] }) {
                 <dd className="text-texto">{MOVIMIENTO_MOTIVO_LABEL[m.motivo]}</dd>
               </div>
               <div className="flex items-end gap-2">
-                {m.fotos_count > 0 ? (
-                  <span title={`${m.fotos_count} foto(s)`} className="text-texto-suave">
-                    📷 {m.fotos_count}
-                  </span>
-                ) : (
-                  <span className="text-texto-tenue">Sin foto</span>
-                )}
+                <BotonFoto
+                  movimientoId={m.id}
+                  codigo={m.codigo}
+                  fecha={m.created_at}
+                  conteo={m.fotos_count}
+                />
                 {anulado ? (
                   <span className="rounded bg-marca px-1.5 py-0.5 text-[10px] font-semibold uppercase text-white">
                     Anulado
@@ -178,9 +180,12 @@ export function HistorialTabla({ filas }: { filas: HistorialRow[] }) {
                     </span>
                   )}
                   {m.fotos_count > 0 ? (
-                    <span title={`${m.fotos_count} foto(s)`} className="ml-1 text-texto-suave">
-                      📷 {m.fotos_count}
-                    </span>
+                    <BotonFoto
+                      movimientoId={m.id}
+                      codigo={m.codigo}
+                      fecha={m.created_at}
+                      conteo={m.fotos_count}
+                    />
                   ) : null}
                 </td>
               </tr>

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { AnularForm } from '@/components/movements/anular-form';
 import { AdjuntarFotoForm } from '@/components/movements/adjuntar-foto-form';
+import { GaleriaFotos } from '@/components/photos/galeria-fotos';
 import { tarjetaClass } from '@/components/ui/field';
 import { HelpButton } from '@/components/ui/help-button';
 import { formatearCantidad } from '@/lib/format/units';
@@ -156,26 +157,12 @@ export default async function DetalleMovimientoPage({
             verlas.
           </p>
         ) : (
-          <ul className="mt-3 grid gap-3 sm:grid-cols-2">
-            {fotos.map((foto) => (
-              <li key={foto.id} className="overflow-hidden rounded-lg ring-1 ring-borde">
-                {foto.url ? (
-                  // URL firmada de corta vida (2 min): no se puede rastrear el
-                  // path interno del bucket ni compartirse una URL eterna.
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={foto.url}
-                    alt={`Foto del movimiento ${movimiento.codigo}`}
-                    className="h-auto w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-40 items-center justify-center bg-superficie-alterna text-sm text-texto-suave">
-                    La foto existe pero no se pudo firmar su URL. Recarga en un momento.
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+          <GaleriaFotos
+            movimientoId={movimiento.id}
+            codigo={movimiento.codigo}
+            fecha={movimiento.created_at}
+            fotos={fotos}
+          />
         )}
       </section>
 

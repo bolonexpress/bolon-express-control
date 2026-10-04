@@ -808,3 +808,278 @@ Es la prueba que faltaba en la 1.2 de `PRUEBAS-FINALES.md`, donde no habia forma
 de ejecutar SQL contra Postgres: para el bucket de fotos no hace falta, porque la
 API de Storage evalua las mismas policies que la base y lo hace con el mismo
 `auth.uid()` del JWT.
+
+---
+
+## ADR-020 · Fase 12: la app tiene que funcionar en HTTP plano
+
+**Contexto.** El negocio entra al inventario desde el celular, en la red local,
+por IP: `http://192.168.1.3:3000`. Eso es un **contexto no seguro**, y el
+navegador esconde ahi una parte de la plataforma web:
+
+| API | En HTTP plano | Como se nota |
+| --- | --- | --- |
+| `crypto.subtle` | no existe | `undefined` |
+| `crypto.randomUUID()` | no existe en varios moviles | `TypeError` al crear el id |
+| `navigator.clipboard.writeText()` | existe pero rechaza | se queda colgado, sin error ni excepcion |
+| `getUserMedia`, `serviceWorker`, `Notification` | no existen | `undefined` |
+| `crypto.getRandomValues()` | **si existe** | funciona |
+| `localStorage` / `sessionStorage` | **si existen** | funcionan |
+
+`randomUUID` era el fallo visible: la app no abria el formulario de movimientos.
+El del portapapeles era peor, porque no fallaba —fallaba en silencio, y el usuario
+creia que la clave se habia copiado.
+
+**Decision.** Dos archivo pequenos, sin dependencias, que degradan en vez de
+romperse.
+
+1. **`lib/uuid.ts` · `nuevoUuid()`.** Tres caminos, en orden: el atajo nativo
+   (`typeof crypto.randomUUID === "function"`), que es el que se usa en HTTPS y
+   `localhost`; si no, un UUID v4 con `crypto.getRandomValues(new Uint8Array(16))`
+   —que si existe en HTTP plano—, ajustando los bits de version
+   (`byte[6] = 0x40 | (byte[6] & 0x0f)`) y de variante
+   (`byte[8] = 0x80 | (byte[8] & 0x3f)`) antes de formatearlo; y como ultimo
+   recurso, `Math.random` con un aviso en consola. El resultado es un UUID v4
+   **canonico**, que es lo que exigen el `uuid` de Postgres y el `.uuid()` de Zod.
+   Con eso, la idempotencia de ADR-006 no depende del navegador: el id es correcto
+   en los dos casos.
+
+   El tercer camino es deliberado y esta anotado en el propio modulo: una clave de
+   idempotencia no es un secreto —no se envia a nadie, no autentica—, solo necesita
+   que dos movimientos distintos no la compartan. Prefiere que la pantalla siga
+   viva a que quede en blanco. Si algun dia se usa para algo secreto, hay que
+   quitarlo, y por eso el aviso va a `console.error` (ADR-018).
+
+2. **`lib/copiar.ts` · `copiarAlPortapapeles()`.** Intenta
+   `navigator.clipboard.writeText()` dentro de `typeof`, y si no existe o falla,
+   cae a un `textarea` temporal con `document.execCommand("copy")`. Devuelve
+   `Promise<boolean>` en lugar de `void`: el boton de la clave temporal necesita
+   **saber** si copio, para no mentirle al usuario.
+
+Lo que **no** se hace, a proposito:
+
+- No se exige HTTPS. Seria la solucion correcta en internet, pero por IP LAN no
+  hay certificado que valga, y dejar la app sin usar seria peor que degradarla.
+- No se agregan polyfills ni una dependencia para resolver algo que son 20 lineas.
+- No se migra a `crypto.subtle` (si, funciona en HTTP plano) porque obligaria a
+  volver asincronos `nuevoUuid()` y con el a los puntos donde se genera el id.
+- No se fabrican los ids **a diario** con `Math.random()`: ese es el ultimo
+  recurso, no el camino normal, y jamas para nada secreto.
+
+**Consecuencia.**
+
+- `middleware.ts` **se queda** con `crypto.randomUUID()`: corre en el runtime de
+  Edge, no en el navegador, y ahi si hay contexto seguro. Ademas solo genera el
+  nonce de la CSP, no toca datos.
+- La foto se toma con `<input type="file">`, no con `getUserMedia`. En el celular
+  el usuario elige de la galeria y el sistema ofrece la camara. No hay captura
+  dentro de la app: es una limitacion conocida de HTTP plano, no un fallo, y
+  mientras `<input type="file">` basico funciona, no se arrastra un `getUserMedia`
+  para sustituirlo.
+- Cualquier API nueva tiene que pasar por esta misma pregunta antes de entrar:
+  *¿esto existe en `http://192.168.1.3:3000`?*
+
+### Como se verifica
+
+`npm run check:http-plano` importa los modulos **reales** (`lib/uuid.ts` y
+`lib/copiar.ts`, que Node 24 lee con type stripping) y reproduce el entorno que
+provoca el fallo: pone `crypto.randomUUID` a `undefined` —sombreandola, no
+borrandola, porque en un contexto no seguro la clave no es propia sino heredada
+y `delete` no haria nada— y monta un `document`/`navigator` de mentira. Si
+alguien vuelve a llamar a la API nativa, el script falla aqui y no en el celular
+de la tienda. Resultado: **11 PASS, 0 FAIL, 1 WARN** (el WARN es el aviso de
+entropia de `Math.random`, que solo se usa en el ultimo recurso y esta ahi para
+que conste).
+
+Como segunda red, se auditaron los 58 archivos de `.next/static` del build de
+produccion, porque un modulo puede estar bien y aun asi acabar fuera del
+cliente. Las cuatro APIs que rompen en HTTP plano aparecen unicamente asi:
+
+- `randomUUID` → 1 archivo: el `nuevoUuid()` con su `typeof` intacto.
+- `navigator.clipboard.writeText` → 1 archivo: el `copiarAlPortapapeles()` con su
+  `typeof` y su `try/catch` intactos.
+- `execCommand` → 1 archivo: el fallback de copiado.
+- `clipboardData` → 2 archivos, pero son React DOM (`SyntheticEvent`), no la API.
+
+Un hallazgo colateral que **valida** el patron: `supabase-js` trae su propio
+generador de PKCE y hace exactamente lo mismo —comprueba `typeof`, y si no, cae a
+`Math.random()`. Es el mismo criterio, aplicado por la propia libreria.
+
+Lo que la auditoria **no** cubre, y queda en manos del guion manual: el
+comportamiento real del portapapeles en cada telefono (algunos Android rechazan
+`writeText` sin lanzar error, y eso solo se ve copiando de verdad).
+
+---
+
+## ADR-021 · `storage.foldername()` excluye el archivo, y por eso hay dos rutas
+
+**Contexto.** ADR-019 arreglo el diagnostico de la foto y dejo el
+`movement_id_de_foto(p_nombre text)` en un solo sitio, para que las tres policies
+de `storage.objects` dejaran de repetir el `exists`. La funcion se aplico en el
+proyecto y **empezo a rechazar toda subida de fotos**:
+
+```
+--- 4) Subida: ruta canonica que exige la policy (sin el bucket) ---
+FAIL  subida canonica — 403 new row violates row-level security policy
+```
+
+La guarda de forma de la migracion 14 pedia **dos** carpetas:
+
+```sql
+when coalesce(array_length(carpetas, 1), 0) < 2 then null
+```
+
+**Decision.** `storage.foldername()` devuelve **solo los segmentos de carpeta y
+excluye el nombre del archivo**. Para la forma canonica
+`<movement_id>/<archivo>` el array tiene **un** elemento, no dos, y la guarda
+devolvia `null` siempre. La condition correcta es `< 1`.
+
+Evidencia, llamando a la funcion ya aplicada con la `service_role`:
+
+| Nombre | Que devuelve | Lectura |
+| --- | --- | --- |
+| `<uuid>/prueba.png` | `null` | canonica — **rota** |
+| `<uuid>/sub/prueba.png` | el UUID | 2 carpetas: pasa |
+| `<uuid>/sub/carpeta/prueba.png` | el UUID | 3 carpetas: pasa |
+| `movement-photos/<uuid>/x.png` | `null` | rechazo previsto (ADR-019) |
+
+Tres filas de esa tabla dicen la misma cosa: la guarda no media carpetas, las
+contaba. Y el caso de las dos carpetas que si pasan demuestra que la validacion
+del UUID y el `carpetas[1]` estaban bien; solo el umbral estaba mal.
+
+**Consecuencia.**
+
+- El archivo de la **migracion 14 quedo corregido en el repo**, para que una
+  instalacion nueva no pase por el estado roto, y la **migracion 15** lo corrige
+  en el proyecto, que ya tiene la 14 aplicada. Ambas son idempotentes y la 15 solo
+  hace `create or replace` de la funcion: **no toca las policies**, porque
+  `create or replace` conserva la firma y las policies la llaman por nombre.
+- Los `grant` no se repiten en la 15: `create or replace` conserva los
+  privilegios. La 14 sigue siendo la que documenta por que hay que darlos.
+- La 15 **se autocomprueba** en la misma transaccion: si el helper no resuelve la
+  forma canonica, o si acepta la forma con el bucket dentro, la migracion levanta
+  excepcion y **no** aplica nada. Una migracion de seguridad que aplica "a medias"
+  es peor que una que se niega a aplicarse.
+- Un 403 de Storage no dice que policy fallo ni por que: dice exactamente lo
+  mismo si la ruta esta mal, si el helper esta roto y si faltan permisos. Por eso
+  `scripts/storage-check.mjs` ahora, cuando la subida canonica falla, **pregunta
+  al helper por la misma ruta** e imprime el veredicto. El mismo guion que
+  encontro el bug es el que lo explica ahora.
+
+Lo que la leccion deja dicho para el futuro: **no hay que suponer lo que
+devuelve una funcion de Postgres**; hay que llamarla con el dato real y mirar el
+resultado. El fallo era de una suposicion —"`foldername` incluye el archivo"—
+escrita en un comentario y creida porque sonaba razonable, y nadie la ejecuto
+hasta que la subida real fallo. La funcion se podia probar con una llamada de una
+linea, con `service_role`, sin escribir nada.
+
+---
+
+## ADR-022 · Fase 12B: el visor firma sus propias fotos, y la compacidad se decide en los tokens
+
+**Contexto.** Dos peticiones de uso diario: poder abrir una foto en grande desde
+el celular (zoom, guardar) y que la app se sienta como una app, no como una web
+grande. La segunda es la que tiene mas riesgo: el proyecto eligio 17px de base y
+48px de alto minimo **a proposito** (elderly-first), asi que tocar la tipografia
+es tocar una decision de la Fase 9.
+
+### 1. El visor firma en el servidor, no en el navegador
+
+**La primera version no funcionaba, y el motivo es结构性: las cookies de sesion
+son `httpOnly`.** `lib/supabase/session-cookies.ts` las marca asi a proposito
+(ADR-008), asi que `document.cookie` **no las ve**. El cliente de Supabase del
+navegador construye su sesion a partir de ahi, de modo que salia sin token: tanto
+la lectura de `photos` como la firma respondian 401, y el visor mestra "no se pudo
+cargar" sin boton de descarga. En el servidor todo funcionaba, que es lo que
+hizo el fallo confuso: **las mismas llamadas, con token, dan 200**.
+
+Evidencia que lo cierra, con la sesion real del admin:
+
+```
+GET /api/fotos/<uuid>  (cookie de sesion)  -> 200, 1 foto, URL firmada
+la URL firmada descargada                     -> 200, 743797 bytes, image/jpeg
+GET /api/fotos/<uuid>  (sin sesion)          -> 401 {"error":"Sesión no válida."}
+```
+
+La leccion: **en una app SSR con cookies httpOnly, el navegador no tiene
+sesion Supabase.** Cualquier cosa que necesite hablar con Supabase desde un Client
+Component (firmar una foto, Realtime, una RPC) tiene que pasar por el servidor.
+`shopping-realtime.tsx` usa el mismo cliente del navegador y deberia revisarse con
+la misma lupa.
+
+El resto de la decision se mantiene:
+
+- **No hay Server Action**: es una Route Handler de solo lectura
+  (`app/api/fotos/[movementId]/route.ts`), que no muta nada y se puede cachear.
+- **La ruta no es un rodeo a la seguridad**: `createClient()` de
+  `lib/supabase/server` usa la **anon key** y las cookies del usuario, asi que la
+  policy de SELECT de Storage sigue decidiendo foto por foto. Sin `photos:read`
+  llega un array vacio, igual que antes. Y `Cache-Control: no-store`, porque son
+  credenciales de acceso.
+- **El middleware deja de redirigir `/api/*`**: mandaba al login y devolvia el
+  HTML de esa pantalla con status 200, con lo que el `fetch()` del visor se
+  comia una pagina en vez de un JSON. Ahora responde 401, que es lo honesto.
+
+### 2. El zoom es `width`, no `transform: scale()`
+
+Sin librerias —el proyecto no depende de ninguna y no se iba a meter una por
+esto— el pellizco se hace con eventos de puntero. La decision que cambia el
+comportamiento es **no usar `transform`**: con `transform` la caja no crece, asi
+que no hay area desplazable y habria que reimplementar el arrastre con el dedo a
+mano, que es justo donde estos gestos fallan en Android. Cambiando el `width` del
+contenedor, la imagen crece de verdad y el `overflow-auto` se encarga del
+desplazamiento con el gesto nativo, que ya funciona.
+
+Dos detalles que salen de esa eleccion: el `touchmove` del navegador se anula con
+un listener **no pasivo solo mientras hay dos dedos** (fuera de ahi el scroll es
+nativo), y el "deslizar hacia abajo para cerrar" se escucha en la barra superior,
+no en la imagen, para no quitarle el gesto a la persona.
+
+### 3. La compacidad se decide en un solo sitio
+
+Recortar 17px a 15px clase por clase habia sido cambiar 40 archivos y, con el
+tiempo, volver a 17px en la mitad. Como Tailwind v4 compila `text-base` a
+`var(--text-base)`, **basta redefinir las variables de `:root` dentro de
+`@media (width < 640px)`**: un bloque de 20 lineas aprieta titulos, labels,
+botones y tarjetas de toda la app, y el escritorio no se entera porque el bloque
+acaba en `sm`.
+
+Con eso, el resto son ajustes locales y justificables uno por uno: padding de
+tarjeta `p-6` → `p-4`, alto minimo de boton **intacto** (48px se quedan: es lo
+que hace que un dedo acierte), barra de pasos de 16px a 6px, y los tres botones
+gigantes del inicio en dos columnas.
+
+### 4. Navegacion: barra de abajo, no mas barra arriba
+
+En el celular la barra de secciones era un scroll horizontal que se comia 64px de
+una pantalla de 700 utiles y dejaba los destinos que mas se usan fuera del primer
+golpe de pulgar. Se sustituye por una barra fija inferior con los cuatro
+primeros destinos —en el **mismo orden** que la lista de secciones, para que no
+haya dos verdades— y un panel "Mas" con el resto.
+
+Lo que NO se hizo, a proposito:
+
+- **No se cambio el RBAC.** La lista llega ya filtrada del servidor; el componente
+  no decide nada, solo pinta. Un rol sin permisos ve una barra mas corta, no una
+  barra con links rotos.
+- **No seccion se elimino en escritorio**: la barra de secciones de arriba sigue
+  intacta a partir de `sm`.
+- **No hay infinite scroll** (seebak en la Peticion). El listado ya pagina por
+  keyset con `created_at|id`, que es lo que permite paginar bien; cambiarlo a
+  scroll infinito densificaria la idea y es un cambio de logica de carga, no de CSS.
+- **No se metio un `select` como bottom sheet.** Reemplazar el selector nativo
+  por uno propio obliga a implementar lista, busqueda, teclado y
+  `aria-activedescendant` para no perder accesibilidad. Es un componente entero, no
+  un ajuste de estilo, y queda fuera de un encargo de CSS.
+
+### 5. Lo que sigue pendiente de mirar con una persona delante
+
+Nada de esto se puede cerrar desde el codigo, igual que los checklists de las
+fases anteriores:
+
+- Que el pellizco se sienta bien en el telefono de la tienda, que es el unico
+  que importa: la velocidad del gesto no se puede medir aqui.
+- Que la barra de abajo no tape contenido y que el area segura del iPhone no
+  parta el boton de "Mas".
+- Que 15px de base siga leyendose bien para quien lleva gafas en la pantalla mas
+  pequena que tiene la tienda. Si no, el ajuste es de ahi, no de cada pantalla.

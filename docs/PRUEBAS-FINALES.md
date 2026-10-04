@@ -122,6 +122,49 @@ formulario, que ahora dicen "Motivo obligatorio, observación opcional" ( paso 3
 de la ayuda y una etiqueta `Obligatorio` en el motivo). El paso **D-4** queda
 como prueba de esa regla: guardar **funciona**.
 
+**H-3 · RESUELTO · El celular entra por HTTP plano, y eso rompia dos cosas.**
+
+El guion asumia que en el celular se podia entrar, pero **nunca se probo por la
+IP**: en el PC siempre fue `localhost`, que si es contexto seguro. Al preparar la
+Fase 12 aparecieron dos fallos que solo existen en `http://192.168.1.3:3000`:
+
+1. `crypto.randomUUID()` **no existe** fuera de HTTPS/localhost, y el formulario
+   de movimientos lo llama al pintarse: pantalla en blanco con `TypeError`.
+2. `navigator.clipboard.writeText()` **existe pero rechaza**, sin lanzar error:
+   el boton "Copiar la clave" no hacia nada y no habia forma de enterarse.
+
+Ninguno era un problema de negocio, pero los dos hacen la app **inservible en el
+celular**, que es donde se usa. Arreglados con dos modulos pequenos y sin
+dependencias (`lib/uuid.ts`, `lib/copiar.ts`); decision completa en **ADR-020**,
+verificacion en la seccion 1.5. Por eso el guion tiene ahora los pasos **A-3**
+(el formulario pinta en el celular) y **J-1b** (la clave se copia de verdad), que
+hay que hacer en el movil y no en el PC.
+
+**H-4 · PENDIENTE · La migracion 14 aplicada impedia subir cualquier foto.**
+
+> **BLOQUEA B-0 y B-1. Aplicar la migracion 15 ANTES de correr el guion.**
+> Si se empieza por el guion sin esto, los dos pasos fallan con
+> `new row violates row-level security policy` y parece un fallo de la app cuando
+> no lo es.
+
+La **migracion 14 si esta aplicada** en el proyecto (se confirma porque
+`public.movement_id_de_foto()` existe y responde), y tiene un fallo: pedia **dos**
+carpetas para aceptar un nombre de objeto, pero `storage.foldername()` devuelve
+solo las carpetas y **excluye el nombre del archivo**, asi que la forma canonica
+`<movement_id>/<archivo>` tiene **una** sola. El helper devolvia `null` siempre y
+las tres policies rechazaban toda subida con 403.
+
+Lo descubrio `npm run check:storage` al volver a correrlo: paso de **9 PASS** a
+**3 PASS · 1 FAIL · 3 WARN**, con el paso 4 (subida canonica) en 403.
+
+Correccion en la **migracion 15** (`create or replace` de la funcion, sin tocar
+las policies), con autocomprobacion: si el helper sigue sin resolver la forma
+canonica, la migracion **aborta y no aplica nada**. Diagnostico completo y
+leccion en **ADR-021**; detalle de la evidencia en la seccion 1.6.
+
+Despues de aplicarla, `npm run check:storage` tiene que volver a **9 PASS · 0
+FAIL · 0 WARN**. Ese es el aviso de que la base esta lista para el guion.
+
 ---
 
 ## 1. Verificaciones runtime (solo lectura)
@@ -136,6 +179,7 @@ Resultado de lo que se pudo comprobar sin escribir nada.
 | R-2 | El trigger de auditoria fires | **PASS** | Fila en `audit_logs`: `accion = 'crear'`, `entidad = 'movements'`, `entidad_id = 69d4612c...`, `actor = 46877040...`, con `after` completo y `stock_tras_movimiento_cantidad = 15`. |
 | R-3 | Migraciones aplicadas | **PASS** | Las 13 existen; `v_stock_productos` y `v_movimientos` responden; las 4 filas de `roles`; `app_config` con 12 claves; bucket privado. |
 | R-4 | Base de datos con RLS | **PASS** | `npm run audit:security` → 6/6 PASS, "RLS habilitado en todas las tablas — 16 tablas revisadas". |
+| R-5 | La app aguanta HTTP plano (celular por IP) | **PASS** | `npm run check:http-plano` → 11 PASS, 0 FAIL, 1 WARN; y el build de produccion no tiene ninguna llamada desnuda a `randomUUID` ni a `navigator.clipboard`. Detalle en **1.5** y **H-3**. |
 | R-5 | La foto es obligatoria en config | **PASS** | `require_movement_photo = true`. |
 | R-6 | La foto no es publica | **PASS** | `movement-photos` con `public = false`. |
 | R-7 | TTL de la URL firmada en el codigo | **PASS (estatico)** | `server/repositories/history.ts` → `createSignedUrl(objectPathDesdePath(foto.path), 120)`. 120 s, como pide el checklist. |
@@ -289,9 +333,108 @@ archivo** (seccion 1.2, bajo "Que se espera"), con lo que confirmen o desmientan
 las cuatro lineas de R-9. Hasta entonces no se da por buena ninguna conclusion
 sobre el rendimiento del historial.
 
+### 1.5 Cerrado: HTTP plano, la app aguanta `http://192.168.1.3:3000`
+
+El celular entra por IP, que es un **contexto no seguro**: ahi
+`crypto.randomUUID()` no existe y el formulario de movimientos se caia con
+`TypeError` antes de pintar nada. `navigator.clipboard.writeText()` es peor,
+porque no lanza error: el boton "Copiar" de la clave temporal no hacia nada y
+nadie se enteraba. Detalle y criterios, en **ADR-020**.
+
+```
+$ npm run check:http-plano
+
+--- 1) nuevoUuid() con crypto.randomUUID disponible ---
+PASS  atajo nativo — 2723c870-8181-4c7b-b16e-a18ef859dee4
+--- 2) nuevoUuid() sin crypto.randomUUID (contexto no seguro) · 2000 UUIDs ---
+PASS  sin randomUUID genera UUID v4 valido — 2000 generados, ninguno invalido
+PASS  sin randomUUID son distintos — 2000/2000 unicos
+--- 3) nuevoUuid() sin crypto (navegador muy antiguo) ---
+PASS  recurso de Math.random — 500 UUIDs v4 validos y distintos
+WARN  entropia — Math.random no es aleatoriedad criptografica
+--- 4) copiarAlPortapapeles sin contexto seguro ---
+PASS  sin portapapeles devuelve false
+PASS  sin portapapeles no deja nodos en el DOM
+PASS  execCommand copia en HTTP plano
+PASS  el textarea efimero se limpia
+PASS  navigator.clipboard manda cuando existe
+PASS  permiso denegado cae al camino antiguo
+11 PASS · 0 FAIL · 1 WARN
+```
+
+El script importa los modulos **reales** y reproduce el entorno: a
+`crypto.randomUUID` la pone a `undefined` sombreandola (no borrandola, que en
+contexto no seguro no haria nada, porque la clave es heredada del prototipo) y
+monta un `document`/`navigator` de mentira. Si alguien vuelve a llamar a la API
+nativa, falla aqui y no en el celular de la tienda.
+
+Como segunda red se audito el **build de produccion** (los 58 archivos de
+`.next/static`), no el codigo fuente, porque un modulo puede estar bien y aun asi
+quedar fuera del cliente:
+
+| API | Archivos | Que es |
+| --- | --- | --- |
+| `randomUUID` | 1 | el `nuevoUuid()`, con su `typeof` intacto |
+| `navigator.clipboard.writeText` | 1 | el `copiarAlPortapapeles()`, con su `typeof` y su `try/catch` |
+| `execCommand` | 1 | el fallback de copiado |
+| `clipboardData` | 2 | React DOM (`SyntheticEvent`), no la API |
+
+Dato colateral que valida el patron: `supabase-js` trae su propio generador de
+PKCE y hace lo mismo —comprueba `typeof`, y si no, cae a `Math.random()`.
+
+**Lo que no cubre ninguna de las dos, y hay que hacer a mano:** el portapapeles
+real de cada telefono. Algunos Android rechazan `writeText` sin lanzar error, y
+eso solo se ve copiando de verdad. Por eso estan los pasos **A-3** y **J-1b** en
+el guion, y hay que hacerlos **en el celular, por la IP**, no en el PC.
+
+---
+
+### 1.6 PENDIENTE: la migracion 15, y por que la 14 rompio la subida
+
+El verificador de Storage es el que encontro el fallo, y ahora ademas lo explica.
+Resultado actual, con la 14 aplicada:
+
+```
+--- 4) Subida: ruta canonica que exige la policy (sin el bucket) ---
+FAIL  subida canonica — 403 new row violates row-level security policy
+  -- diagnostico: que resuelve movement_id_de_foto("69d4.../verificacion-...png") --
+  resultado -> null
+  lectura: el helper NO resuelve la forma canonica ... Se corrige con la migracion 15.
+3 PASS · 1 FAIL · 3 WARN
+```
+
+La llamada directa al helper, con la `service_role` y sin escribir nada, da la
+sentencia en una tabla (**ADR-021**):
+
+| Nombre del objeto | `movement_id_de_foto` | |
+|---|---|---|
+| `<uuid>/prueba.png` | `null` | canonica: **rota** |
+| `<uuid>/sub/prueba.png` | el UUID | 2 carpetas |
+| `<uuid>/sub/carpeta/prueba.png` | el UUID | 3 carpetas |
+| `movement-photos/<uuid>/x.png` | `null` | rechazo previsto |
+
+**Que hay que hacer**, en este orden:
+
+1. Abrir el SQL Editor de Supabase y ejecutar el contenido de
+   `supabase/migrations/20260101001400_15_storage_helper_fix.sql`. Es idempotente.
+2. Si la consola muestra un error que empieza por **"Migracion 15: ..."**, es que
+   **no** esta aplicada: la autocomprobacion fallo y la transaccion se deshizo
+   entera. Nada queda a medias, que es justo para lo que esta.
+3. Correr `npm run check:storage`: tiene que dar **9 PASS · 0 FAIL · 0 WARN**.
+4. Solo entonces empezar el bloque **B** del guion.
+
+Las 3 verificaciones bloqueadas de la 1.2 (los `EXPLAIN` de E-1 a E-7) siguen
+pendientes y son independientes de esto.
+
 ---
 
 ## 2. Guion de pruebas
+
+> **Antes de empezar: aplicar la migracion 15** (seccion 1.6, **H-4**). Mientras
+> no este aplicada, los pasos **B-0** y **B-1** fallan con `new row violates
+> row-level security policy` porque toda subida de fotos esta bloqueada. El sintoma
+> es identico al bug de ADR-019, asi que conviene aplicar la 15 **antes** de
+> empezar, no cuando falle.
 
 Preparacion: tener el PC en `/login` y el celular en
 `http://192.168.1.3:3000/login`, ambos en la misma red.
@@ -304,10 +447,11 @@ Preparacion: tener el PC en `/login` y el celular en
 |---|---|---|---|
 | A-1 | `admin` entra a `/login` con su correo y clave. | Entra al inicio. Salen los avisos "Hola, admin" y el menu con el nombre. | [ ] |
 | A-2 | `/admin/auditoria` tiene 98 eventos y la barra muestra tu entrada y tu salida. | Barra con "Auditoria"; el evento `login` mas reciente con tu correo. | [ ] |
-| A-3 | Con el movil, entra **por primera vez con una cuenta nueva** (la del paso J-1, si ya existe; si no, espera a J-1). | Se abre el carrusel de bienvenida solo, la primera vez. | [ ] |
-| A-4 | Toca **"Saltar"** (o **"Entendido"**). | Se cierra. **No vuelve** a salir ni recargando la pagina. | [ ] |
-| A-5 | Abre el menu de la cuenta y toca **"Ver tour de nuevo"**. | Se abre el carrusel aunque ya se hubiera cerrado. | [ ] |
-| A-6 | Cierra el carrusel y entra a `/bienvenida`. | El recorrido se puede leer sin scrolls: pasos, ayuda y el footer. | [ ] |
+| A-3 | En el **celular, por la IP** (`http://192.168.1.3:3000`), entra a `/movimientos/entrada`. | El formulario **pinta entero**: producto, cantidad, foto, motivo, resumen. Si saliera en blanco o con un error, es que `crypto.randomUUID` volvio a usarse en cliente: `FAIL`, se para. Este es el fix de ADR-020. | [ ] |
+| A-4 | Con el movil, entra **por primera vez con una cuenta nueva** (la del paso J-1, si ya existe; si no, espera a J-1). | Se abre el carrusel de bienvenida solo, la primera vez. | [ ] |
+| A-5 | Toca **"Saltar"** (o **"Entendido"**). | Se cierra. **No vuelve** a salir ni recargando la pagina. | [ ] |
+| A-6 | Abre el menu de la cuenta y toca **"Ver tour de nuevo"**. | Se abre el carrusel aunque ya se hubiera cerrado. | [ ] |
+| A-7 | Cierra el carrusel y entra a `/bienvenida`. | El recorrido se puede leer sin scrolls: pasos, ayuda y el footer. | [ ] |
 
 ---
 
@@ -318,7 +462,7 @@ Preparacion: tener el PC en `/login` y el celular en
 
 | # | Paso | Resultado esperado | |
 |---|---|---|---|
-| **B-0** | Abre `/movimientos` -> toca `#000001` (ACEITE, entrada de 20 l, la que quedo sin foto). Elige **cualquier foto real** de tu telefono y toca **"Adjuntar foto"**. | Aviso **"Foto adjuntada a #000001"**, y la foto aparece en la seccion de fotografia. **Este es el paso que verifica el fix de H-1.** El boton solo aparece si el movimiento no tiene foto y no esta anulado. | [ ] |
+| **B-0** | Abre `/movimientos` -> toca `#000001` (ACEITE, entrada de 20 l, la que quedo sin foto). Elige **cualquier foto real** de tu telefono y toca **"Adjuntar foto"**. | Aviso **"Foto adjuntada a #000001"**, y la foto aparece en la seccion de fotografia. **Este es el paso que verifica el fix de H-1.** El boton solo aparece si el movimiento no tiene foto y no esta anulado. **Requiere la migracion 15 aplicada** (H-4). | [ ] |
 | B-1 | Entrar -> **"Recibir mercancia"**. Elige ACEITE. Escribe **10** en Cantidad. Adjunta una **foto** (cualquier `.jpg` de tu telefono). Pon el motivo y **Guardar la entrada**. | Vuelve al inicio con el aviso "Movimiento #000002 registrado." **Sin ningun aviso de "la foto no se pudo adjuntar"**: ese era el fallo. En Inventario, ACEITE pasa a `cantidad = 25`. | [ ] |
 | B-2 | Abre `/historial`. | La primera fila es `#000002`, tipo entrada, con tu nombre. Al abrirla, la **foto se ve** y el resto de datos cuadran. | [ ] |
 | B-3 | **Vuelve al detalle de `#000001` y comprueba que su foto se ve.** | La foto se ve. Si `#000001` ya tiene foto de B-0, el boton "Adjuntar foto" **no** aparece: solo se ofrece cuando no hay ninguna. | [ ] |
@@ -430,6 +574,7 @@ Preparacion: tener el PC en `/login` y el celular en
 | # | Paso | Resultado esperado | |
 |---|---|---|---|
 | J-1 | `/admin/usuarios` -> **Añadir persona**: nombre, correo nuevo (usa uno de pruebas, p. ej. `prueba.temporal@`), telefono, rol **Operador**. | Aparece la **contrasena temporal** una sola vez, con "Copiar la clave". **No** esta en la URL. Anotala. | [ ] |
+| J-1b | En el **celular, por la IP**, repite J-1 y pulsa **"Copiar la clave"**. Despega la clave en el campo del correo, en un chat o en cualquier sitio. | Pega la clave **entera**. Si no pega nada, el portapapeles fallo en silencio: es justo el fallo de ADR-020. Si tampoco avisa, `FAIL` (deberia decir "copiala a mano"). | [ ] |
 | J-2 | Con ese correo y esa clave, entra desde el celular. | Entra, y la app lo manda a `/cambiar-password` antes de dejarlo usar nada. | [ ] |
 | J-3 | En su ficha, cambiale el rol a **Supervisor**. | "Guardado correctamente". Sin volver a entrar, su sesion ya tiene mas permisos. | [ ] |
 | J-4 | Vuelve a **Operador** y luego **desactivalo** (pasa por el modal). | El modal avisa que no se borra nada. Queda **Inactivo**. Al intentar entrar con su clave, rebota. | [ ] |
@@ -459,11 +604,40 @@ Preparacion: tener el PC en `/login` y el celular en
 
 ---
 
+### L. Visor de fotos y compacto movil (Fase 12B)
+
+> Este bloque necesita una foto de verdad: usa la del paso **B-0** o **B-1**. Y
+> hay que hacerlo **en el celular**: el zoom con pellizco y el guardado no se
+> pueden probar en el PC.
+
+| # | Paso | Resultado esperado | |
+|---|---|---|---|
+| L-1 | En `/historial`, toca el **contador de fotos** de un movimiento con foto. | Se abre a pantalla completa con la foto. El listado **no** descarga imagenes: solo se pide al abrir. | [ ] |
+| L-2 | **Pellizca** la foto con dos dedos. | Amplia y reduce con el gesto, sin que la pagina se mueva debajo. | [ ] |
+| L-3 | Con la foto ampliada, **desliza un dedo**. | La foto se mueve a los lados y arriba: hay area desplazable de verdad. | [ ] |
+| L-4 | Toca dos veces la foto. | Alterna entre tamaño completo y ampliado. | [ ] |
+| L-5 | Toca **fuera** de la foto. | Cierra. | [ ] |
+| L-6 | **Desliza hacia abajo** desde la barra superior. | Cierra. | [ ] |
+| L-7 | Con el visor abierto, pulsa `Esc` (en el PC) y despues `Tab` varias veces. | Cierra con `Esc`. Con el visor abierto el foco **no sale** del modal. | [ ] |
+| L-8 | Toca **"Guardar"** (o "Descargar foto" en PC). | Se abre la imagen. En el celular se guarda manteniendo pulsada. El archivo se llama `movimiento-#00000X-AAAA-MM-DD.jpg`. | [ ] |
+| L-9 | Deja el visor abierto **mas de 5 minutos** y mira. | Aparece **"Recargar imagen"**. Al pulsarla, la foto vuelve. | [ ] |
+| L-10 | En `/movimientos/[id]`, abre una foto desde la miniatura. | Se abre el visor, en la foto que tocaste (no siempre la primera). | [ ] |
+| L-11 | En el celular, mira las pantallas principales: inicio, inventario, historial, compras, movimientos. | Todo se ve **mas compacto**: h1 de 22px, texto de 15px, tarjetas con menos aire. Los botones grandes de entrada/salida/inventario van **de dos en dos**. | [ ] |
+| L-12 | Mira la **barra de abajo**. | Los cuatro destinos de uso diario, con el activo resaltado. Se reaches con el pulgar sin desplazar la pagina. | [ ] |
+| L-13 | Toca **"Mas"**. | Panel con el resto de pantallas. Se cierra con `Esc` o tocando fuera. | [ ] |
+| L-14 | Baja hasta el final de una lista larga en el celular. | La ultima fila **no** queda debajo de la barra de abajo: se lee y se toca. | [ ] |
+| L-15 | En el **PC** (o con la ventana a 900px o mas), recorre las mismas pantallas. | El diseño **sigue igual que antes**: barra de secciones arriba, texto de 17px, tarjetas amplias. | [ ] |
+
+> L-2 y L-3 son los que de verdad no se pueden cerrar sin el telefono: si el
+> pellizco no responde o la pagina se mueve por debajo, es `FAIL` y se para.
+
+---
+
 ## 3. Resumen
 
 | Bloque | Pasos | PASS | FAIL |
 |---|---|---|---|
-| A. Acceso | 6 | | |
+| A. Acceso | 7 | | |
 | B. Entrada con foto | 6 | | |
 | C. Inventario | 4 | | |
 | D. Salida | 4 | | |
@@ -472,9 +646,10 @@ Preparacion: tener el PC en `/login` y el celular en
 | G. Compras + realtime | 7 | | |
 | H. Historial | 6 | | |
 | I. Auditoria | 5 | | |
-| J. Personas | 12 | | |
+| J. Personas | 13 | | |
 | K. Accesibilidad | 8 | | |
-| **Total** | **67** | | |
+| L. Visor + compacto | 15 | | |
+| **Total** | **84** | | |
 
 Al terminar: cambiar los `[ ]` del README por `[x]` en lo que paso, y dejar
 anotado en este documento cada `FAIL` con su pasos y su foto.

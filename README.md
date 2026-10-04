@@ -542,13 +542,33 @@ cerrados desde el codigo:
 
 ## Verificacion de la fase 12
 
+Esta fase cierra el telefono sobre **HTTP plano**. La app se usa en la tienda
+entrando por la IP del Wi-Fi, y eso no se habia probado nunca: en el PC siempre
+fue `localhost`, que si es contexto seguro. Lo que se rompia ahi, y como quedo,
+esta en **ADR-020**.
+
+- [x] `npm run check:http-plano` en verde: **11 PASS, 0 FAIL, 1 WARN**. El script
+      importa los modulos reales y simula el contexto no seguro.
+- [x] El build de produccion no tiene ninguna llamada desnuda a `crypto.randomUUID`
+      ni a `navigator.clipboard.writeText`: los 58 archivos de `.next/static`
+      revisados, y lo unico que aparece es el codigo con su `typeof`.
+- [x] El identificador de idempotencia sigue siendo un **UUID v4 canonico** sin
+      `randomUUID`: es lo que exigen Zod y Postgres, asi que la proteccion contra
+      el doble toque no depende del navegador.
+- [x] El boton de copiar **dice** si copio (`copiarAlPortapapeles` devuelve
+      `boolean`) en vez de fallar en silencio, que era el fallo peor de los dos.
+- [x] Sin dependencias nuevas para resolverlo: 20 lineas y un `Uint8Array`.
+- [ ] **A-3** y **J-1b** del guion, en el celular y por la IP: que el formulario
+      de entrada se pinte entero y que la clave temporal se pegue de verdad. Es lo
+      unico que no se puede cerrar sin una persona con el telefono en la mano.
+
 El protocolo numerado para PC y celular esta en
-**[`docs/PRUEBAS-FINALES.md`](docs/PRUEBAS-FINALES.md)** (67 pasos, con resultado
+**[`docs/PRUEBAS-FINALES.md`](docs/PRUEBAS-FINALES.md)** (84 pasos, con resultado
 esperado y casilla por paso). Alli queda tambien:
 
 - El snapshot de la base real del `2026-10-04` y la config que gobierna cada
   comportamiento (`require_movement_photo`, `allow_negative_stock`, ...).
-- El resultado de las verificaciones runtime de solo lectura: **9 hechas** (la mas
+- El resultado de las verificaciones runtime de solo lectura: **10 hechas** (la mas
   importante, R-1: el bug del `peso_kg` corregido y comprobado sobre un movimiento
   real) y **3 bloqueadas** por falta de acceso directo a Postgres, con el SQL
   exacto para pegar en el SQL Editor de Supabase.
@@ -558,6 +578,10 @@ esperado y casilla por paso). Alli queda tambien:
   de la API de Auth, cliente de sesion, subida -> 201 -> borrado).
 - **H-2** resuelto: el motivo es obligatorio y la observacion es opcional. Sin
   cambios de esquema; se ajusto la ayuda "?" y el formulario.
+- **H-3** resuelto: el celular entra por **HTTP plano**, y ahi
+  `crypto.randomUUID()` no existe y `navigator.clipboard` falla en silencio.
+  Arreglado en `lib/uuid.ts` y `lib/copiar.ts`; decision en **ADR-020** y
+  verificacion con `npm run check:http-plano` (11 PASS, 0 FAIL, 1 WARN).
 - El plan de volumen **aprobado** para probar la paginacion y los `EXPLAIN`, con
   su orden: despues de que el guion A-F pase completo.
 
@@ -565,8 +589,63 @@ esperado y casilla por paso). Alli queda tambien:
 > celular **no tiene ruta hacia el**. En el Wi-Fi de la casa hay que usar
 > `http://192.168.1.3:3000`.
 
+> **No hace falta HTTPS.** Es un contexto no seguro (ahi no existen
+> `crypto.subtle`, `crypto.randomUUID` ni `getUserMedia`, y el portapapeles
+> puede rechazar), y la app esta hecha para aguantarlo: el identificador se
+> genera con `nuevoUuid()` y el copiado con `copiarAlPortapapeles()`, los dos con
+> reserva. Lo que **no** hay es camara dentro de la app: la foto se elige con el
+> selector de archivos, y en el celular es el sistema quien ofrece la camara.
+> Ver **ADR-020**.
+
 > **Ojo con `npm run build`:** si el servidor de desarrollo esta levantado,
 > `next build` y `next dev` se pelean por la misma carpeta `.next` y el build
 > puede morir con `Invariant: no direct app page entry found for /_not-found`.
-> No es un fallo del codigo: **para el build, para el `dev` primero**. Para las
-> pruebas solo hace falta `npm run dev`.
+> No es un fallo del codigo: **para el build, para el `dev` primero**. Si ya lo
+> paraste y aun asi falla, es que el `.next` quedo a medias: borralo
+> (`Remove-Item -LiteralPath .next -Recurse -Force`) y repite. Para las pruebas
+> solo hace falta `npm run dev`.
+
+## Verificacion de la fase 12B
+
+Dos mejoras de uso diario: ver las fotos en grande y que la app no se sienta
+como una web grande en el celular. Decisiones y descartes, en **ADR-022**.
+
+### Cerrado por codigo
+
+- [x] `npm run typecheck`, `npm run lint` y `npm run build` en verde.
+- [x] `components/photos/photo-viewer.tsx`: modal a pantalla completa en movil y
+      centrado en escritorio, con `object-contain`, navegacion entre fotos,
+      flechas del teclado, `Esc`, foco atrapado y bloqueo del fondo (`<dialog>`
+      nativo). Cerrar tocando fuera y deslizando hacia abajo.
+- [x] **Zoom sin librerias**: pellizco con eventos de puntero, doble toque y
+      botones. La imagen crece de verdad (cambia su `width`), asi que el
+      desplazamiento con el dedo es el nativo del navegador y no hay que
+      reimplementarlo.
+- [x] **URL firmada nueva en cada apertura**, de 5 minutos, hecha por el cliente
+      de sesion: la policy de Storage evalua el mismo `auth.uid()` que en el
+      servidor, asi que no hace falta Server Action. Con reloj de caducidad y
+      boton **"Recargar imagen"**.
+- [x] Descargar con nombre legible: `movimiento-#000001-2026-10-04.jpg`.
+- [x] Integrado en `/historial` (el contador de fotos abre el visor; el listado
+      **sigue sin cargar imagenes**, ADR-014) y en `/movimientos/[id]`
+      (miniaturas con lupa).
+- [x] Compacto en movil en **un solo sitio**: `@media (width < 640px)` en
+      `app/globals.css` redefiniendo las variables de texto, que es donde Tailwind
+      v4 las lee. Titulos, labels, botones y tarjetas de toda la app bajan a la
+      vez; el escritorio no se entera.
+- [x] Barra de navegacion inferior en movil con los cuatro destinos de uso
+      diario y un panel "Mas" con el resto. La lista llega ya filtrada por
+      permisos desde el servidor: el componente no decide nada.
+- [ ] **L-2, L-3 y L-11 a L-15 del guion, en el celular**: el pellizco, el
+      desplazamiento con la foto ampliada y si 15px de base se leen bien. Es lo
+      unico que no se puede cerrar sin una persona mirando la pantalla.
+
+### Lo que no se hizo, y por que
+
+- **Infinite scroll**: el listado ya pagina por keyset `created_at|id`; cambiarlo
+  es un cambio de logica de carga, no de estilo.
+- **`select` como bottom sheet**: reemplazar el selector nativo obliga a
+  implementar lista, busqueda y navegacion por teclado para no perder
+  accesibilidad. Es un componente entero, no un ajuste de CSS.
+- **El visor en `/admin/auditoria`**: la bitacora no guarda fotos (los eventos son
+  de perfil, rol, catalogo, compras y movimientos), asi que no hay nada que abrir.

@@ -20,6 +20,7 @@ import { BarraPasos } from '@/components/ui/progress-steps';
 import { SubmitButton } from '@/components/ui/submit-button';
 import { useToastDeEstado } from '@/components/ui/toast';
 import { formatearCantidad } from '@/lib/format/units';
+import { nuevoUuid } from '@/lib/uuid';
 import { CAMPO_FORMULARIO, validarValoresSegunModo } from '@/lib/validation/movements';
 import type { RegistrarMovimientoInput } from '@/lib/validation/movements';
 import { consultarStockAction, registrarMovimientoAction } from '@/server/actions/movements';
@@ -156,7 +157,7 @@ export function MovementForm({
   const [motivo, setMotivo] = useState<string>(MOTIVOS_POR_TIPO[tipo][0] ?? 'otro');
   const [stock, setStock] = useState<ProductoParaFormulario | null>(null);
   const [fotoArchivo, setFotoArchivo] = useState<File | null>(null);
-  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey, setIdempotencyKey] = useState(() => nuevoUuid());
 
   // Al cambiar de paso el foco se lleva a la zona de pasos: sin esto, quien
   // navega con teclado se queda en el boton "Continuar" del final y el lector de
@@ -197,11 +198,13 @@ export function MovementForm({
 
   // Regenera la clave ante cualquier cambio de dato (ADR-006): un doble toque
   // reintenta con la misma clave y la RPC devuelve el movimiento original.
+  // `nuevoUuid()` y no `crypto.randomUUID()` porque esta pantalla se abre
+  // tambien por IP en HTTP plano, donde la API nativa no existe (ADR-020).
   const firma = JSON.stringify([tipo, productoId, cantidad, pesoKg, motivo]);
   const [firmaVista, setFirmaVista] = useState(firma);
   if (firmaVista !== firma) {
     setFirmaVista(firma);
-    setIdempotencyKey(crypto.randomUUID());
+    setIdempotencyKey(nuevoUuid());
   }
 
   // Si el servidor devuelve un error, se abre el paso que contiene el campo.

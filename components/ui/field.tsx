@@ -20,18 +20,24 @@ import { IconAviso, IconCheckCirculo } from '@/components/ui/icons';
 /**
  * Los controles que reciben `aria-invalid` (cuando la Server Action devuelve
  * error para ese campo) se marcan con borde y foco rojos.
+ *
+ * Fase 12B: el alto de 56px se mantiene en movil (es el minimo que garantiza
+ * acertar con el dedo), pero el relleno baja: la caja no crece de alto, lo que
+ * se recorta es el aire de los lados, que en un campo de formulario es aire que
+ * no aporta nada.
  */
 export const inputClass =
-  'w-full min-h-7 rounded-xl border-2 border-borde bg-superficie px-4 py-3 text-base text-texto placeholder:text-texto-tenue focus:border-marca focus:outline-none focus:ring-4 focus:ring-marca/20 disabled:bg-fondo disabled:text-texto-suave aria-invalid:border-peligro aria-invalid:focus:ring-peligro/20';
+  'w-full min-h-7 rounded-xl border-2 border-borde bg-superficie px-3 py-2.5 text-base text-texto placeholder:text-texto-tenue focus:border-marca focus:outline-none focus:ring-4 focus:ring-marca/20 disabled:bg-fondo disabled:text-texto-suave aria-invalid:border-peligro aria-invalid:focus:ring-peligro/20 sm:px-4 sm:py-3';
 
-export const labelClass = 'block text-base font-semibold text-texto';
+/** Etiqueta: 15px en movil, 17px en escritorio. El nombre del campo va grande. */
+export const labelClass = 'block text-[15px] font-semibold text-texto sm:text-base';
 
 export const helpClass = 'text-sm text-texto-suave';
 
 /** Boton de formulario: ancho completo en movil, ancho de contenido en escritorio. */
 export const botonPrimarioClass = botonClass('primario', 'lg', 'w-full sm:w-auto');
 
-export const errorClass = 'flex items-start gap-2 text-base font-medium text-peligro';
+export const errorClass = 'flex items-start gap-2 text-sm font-medium text-peligro sm:text-base';
 
 type FieldProps = {
   id: string;
@@ -50,7 +56,7 @@ type FieldProps = {
  */
 export function Field({ id, label, error, hint, children }: FieldProps) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5 sm:space-y-2">
       <label htmlFor={id} className={labelClass}>
         {label}
       </label>
@@ -93,8 +99,8 @@ export function Checkbox({
   const controlada = checked !== undefined;
 
   return (
-    <div className="space-y-2">
-      <div className="flex min-h-7 items-center gap-3 rounded-xl border-2 border-borde bg-superficie px-4 py-3">
+    <div className="space-y-1.5 sm:space-y-2">
+      <div className="flex min-h-7 items-center gap-3 rounded-xl border-2 border-borde bg-superficie px-3 py-2.5 sm:px-4 sm:py-3">
         <input
           id={id}
           name={id}
@@ -107,7 +113,7 @@ export function Checkbox({
             : { defaultChecked })}
           className="size-[32px] shrink-0 rounded-lg border-2 border-borde-fuerte accent-marca focus:ring-4 focus:ring-marca/20"
         />
-        <label htmlFor={id} className="text-base font-medium text-texto">
+        <label htmlFor={id} className="text-[15px] font-medium text-texto sm:text-base">
           {label}
         </label>
       </div>
@@ -123,7 +129,8 @@ export function Checkbox({
 }
 
 /** Superficie de alto contraste. Mismo aspecto que `Card` de `components/ui/card`. */
-export const tarjetaClass = 'rounded-2xl bg-superficie p-6 shadow-tarjeta ring-1 ring-borde';
+export const tarjetaClass =
+  'rounded-2xl bg-superficie p-4 shadow-tarjeta ring-1 ring-borde sm:p-6';
 
 /** Aviso de exito dentro de un formulario (mismo tono que los toasts). */
 export function ExitoInline({ children }: { children: ReactNode }) {

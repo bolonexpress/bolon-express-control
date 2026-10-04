@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "seed:admin": "node scripts/seed-admin.mjs",
     "audit:security": "node scripts/security-audit.mjs",
-    "check:storage": "node scripts/storage-check.mjs"
+    "check:storage": "node scripts/storage-check.mjs",
+    "check:http-plano": "node scripts/http-plano-check.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

@@ -26,7 +26,7 @@ export function CardCabecera({
   acciones?: ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4 border-b border-borde px-6 py-5">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-borde px-4 py-3.5 sm:gap-4 sm:px-6 sm:py-5">
       <div className="space-y-1">
         <h2 className="text-lg font-bold text-texto">{titulo}</h2>
         {descripcion ? <p className="text-base text-texto-suave">{descripcion}</p> : null}
@@ -37,10 +37,10 @@ export function CardCabecera({
 }
 
 export function CardCuerpo({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`px-6 py-6 ${className}`}>{children}</div>;
+  return <div className={`px-4 py-4 sm:px-6 sm:py-6 ${className}`}>{children}</div>;
 }
 
 /** Separador de secciones del cuerpo, sin caja. */
 export function Seccion({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <section className={`space-y-6 ${className}`}>{children}</section>;
+  return <section className={`space-y-4 sm:space-y-6 ${className}`}>{children}</section>;
 }

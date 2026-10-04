@@ -127,15 +127,13 @@ export default async function HomePage() {
   ];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5 sm:space-y-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-texto">
+          <h1 className="text-2xl font-bold text-texto sm:text-3xl">
             Hola, {context.profile.full_name.split(' ')[0]}
           </h1>
-          <p className="mt-1 text-lg text-texto-suave">
-            ¿Qué necesitas hacer hoy?
-          </p>
+          <p className="mt-1 text-base text-texto-suave sm:text-lg">¿Qué necesitas hacer hoy?</p>
         </div>
 
         <HelpButton
@@ -150,19 +148,22 @@ export default async function HomePage() {
       </div>
 
       {accionesPrincipales.length > 0 ? (
-        <ul className="grid gap-4 sm:grid-cols-3">
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           {accionesPrincipales.map((accion) => (
             <li key={accion.href}>
               <Link
                 href={accion.href}
-                className={`flex min-h-[180px] flex-col justify-between gap-4 rounded-2xl p-6 ring-1 transition-colors ${accion.clase}`}
+                className={`flex min-h-[112px] flex-col justify-between gap-2 rounded-2xl p-4 ring-1 transition-colors sm:min-h-[180px] sm:gap-4 sm:p-6 ${accion.clase}`}
               >
-                <span aria-hidden="true" className="opacity-90">
+                {/* El icono baja a 28px en movil: a 36px se comia media tarjeta. */}
+                <span aria-hidden="true" className="opacity-90 [&>svg]:size-7 sm:[&>svg]:size-9">
                   {accion.icono}
                 </span>
                 <span>
-                  <span className="block text-2xl font-bold leading-tight">{accion.titulo}</span>
-                  <span className="mt-1 block text-base leading-snug opacity-90">
+                  <span className="block text-lg font-bold leading-tight sm:text-2xl">
+                    {accion.titulo}
+                  </span>
+                  <span className="mt-0.5 block text-sm leading-snug opacity-90 sm:mt-1 sm:text-base">
                     {accion.ayuda}
                   </span>
                 </span>
@@ -193,18 +194,18 @@ export default async function HomePage() {
               Para lo que no haces todos los días.
             </p>
 
-            <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className="mt-3 grid grid-cols-1 gap-2.5 sm:mt-4 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3">
               {modulos.map((item) => (
                 <li key={item.href}>
                   <Link
                     href={item.href}
-                    className="flex min-h-[112px] flex-col justify-center gap-1 rounded-xl border-2 border-borde bg-superficie p-4 transition-colors hover:border-marca hover:bg-marca-lima/15"
+                    className="flex min-h-[84px] flex-col justify-center gap-0.5 rounded-xl border-2 border-borde bg-superficie p-3.5 transition-colors hover:border-marca hover:bg-marca-lima/15 sm:min-h-[112px] sm:gap-1 sm:p-4"
                   >
-                    <span className="flex items-center gap-2 text-marca">
+                    <span className="flex items-center gap-2 text-marca [&>svg]:size-5 sm:[&>svg]:size-6">
                       {item.icono}
-                      <span className="text-lg font-bold text-texto">{item.label}</span>
+                      <span className="text-base font-bold text-texto sm:text-lg">{item.label}</span>
                     </span>
-                    <span className="text-base text-texto-suave">{item.ayuda}</span>
+                    <span className="text-sm text-texto-suave sm:text-base">{item.ayuda}</span>
                   </Link>
                 </li>
               ))}

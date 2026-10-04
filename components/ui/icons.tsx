@@ -281,3 +281,43 @@ export const IconPersona = (p: IconProps) => (
     <path d="M5 20a7 7 0 0 1 14 0" />
   </Base>
 );
+
+/** Lupa: "esto se abre en grande". Marca de las miniaturas de foto. */
+export const IconLupa = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="10.5" cy="10.5" r="6" />
+    <path d="m15 15 4.5 4.5" />
+  </Base>
+);
+
+/** Descargar: bajar el archivo al telefono. */
+export const IconDescargar = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 3.5v11m0 0 4-4m-4 4-4-4" />
+    <path d="M4.5 17.5v1a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-1" />
+  </Base>
+);
+
+/** Acercar: zoom del visor de fotos. */
+export const IconAcercar = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="10.5" cy="10.5" r="6" />
+    <path d="M10.5 8v5M8 10.5h5m2 5 4.5 4.5" />
+  </Base>
+);
+
+/** Alejar: la vuelta atras del zoom. */
+export const IconAlejar = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="10.5" cy="10.5" r="6" />
+    <path d="M8 10.5h5m2 5 4.5 4.5" />
+  </Base>
+);
+
+/** Foto caducada: forzar una URL firmada nueva. */
+export const IconRenovar = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M20 12a8 8 0 1 1-2.6-5.9" />
+    <path d="M20 4.5V10h-5.5" />
+  </Base>
+);

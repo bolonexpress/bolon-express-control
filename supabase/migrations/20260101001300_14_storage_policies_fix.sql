@@ -61,9 +61,12 @@ as $$
     -- forma (y no por un `exists` que fallaria igual) para que el error sea
     -- inequivoco si alguien vuelve a construir la ruta asi.
     when p_nombre like 'movement-photos/%' then null
-    -- Se necesitan DOS carpetas: el movimiento y el archivo. Sin el nombre del
-    -- archivo, `foldername` no devuelve nada y el `[1]` es null.
-    when coalesce(array_length(carpetas, 1), 0) < 2 then null
+    -- Se necesita al menos UNA carpeta: la del movimiento. `storage.foldername()`
+    -- devuelve SOLO las carpetas y excluye el nombre del archivo, asi que para la
+    -- forma canonica `<movement_id>/<archivo>` el array tiene un unico elemento.
+    -- (Exigir dos fue el error de la primera version de esta migracion, que
+    -- rechazo toda subida legitima; corregido aqui y en la migracion 15.)
+    when coalesce(array_length(carpetas, 1), 0) < 1 then null
     -- El primer segmento tiene que ser un UUID. Se valida antes de castear:
     -- un `::uuid` sobre un texto que no lo es lanza excepcion, y dentro de una
     -- policy eso se traduciria en un error 500 en vez de un 403 limpio.

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { TourPrimerIngreso } from '@/components/onboarding/tour';
+import { BottomNav } from '@/components/ui/bottom-nav';
 import { BrandLogo } from '@/components/ui/brand-logo';
 import { ToastProvider } from '@/components/ui/toast';
 import { UserMenu } from '@/components/ui/user-menu';
@@ -31,7 +32,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const veAuditoria = contextHasPermission(context, PERMISOS.auditRead);
   const vePersonas = contextHasPermission(context, PERMISOS.usersManage);
 
-  // El RBAC no cambia: solo se ofrece lo que el rol puede leer, igual que antes.
+  // La barra de abajo (movil) y la de secciones (escritorio) usan la MISMA
+  // lista, en el MISMO orden: asi "lo que mas se usa" queda en los cuatro
+  // primeros, que son los que caben sin apretar.
   const secciones = [
     ...(veInventario ? [{ href: '/inventario', label: 'Inventario' }] : []),
     ...(veCatalogo
@@ -44,8 +47,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     ...(veMovimientos ? [{ href: '/movimientos', label: 'Movimientos' }] : []),
     ...(veCompras ? [{ href: '/compras', label: 'Compras' }] : []),
 ...(veHistorial ? [{ href: '/historial', label: 'Historial' }] : []),
-...(vePersonas ? [{ href: '/admin/usuarios', label: 'Personas' }] : []),
-...(veAuditoria ? [{ href: '/admin/auditoria', label: 'Auditoría' }] : []),
+    ...(vePersonas ? [{ href: '/admin/usuarios', label: 'Personas' }] : []),
+    ...(veAuditoria ? [{ href: '/admin/auditoria', label: 'Auditoría' }] : []),
   ];
 
   return (
@@ -61,15 +64,21 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
       <div className="flex min-h-dvh flex-col">
         <header data-superficie="oscura" className="sticky top-0 z-30 bg-marca-fuerte text-white shadow-elevada">
-          <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-3 py-2 sm:px-4">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-2 px-3 py-1.5 sm:gap-3 sm:px-4 sm:py-2">
             <Link href="/" className="rounded-xl" aria-label="Ir al inicio">
-              <BrandLogo altura={26} variante="sobre-oscuro" prioridad />
+              {/* Un solo logo, no dos con `hidden`: el `img` lleva el alto en
+                  estilo inline, asi que no se puede cambiar por breakpoint sin
+                  duplicar el nodo y la descarga. 24px se lee igual de bien que
+                  26 y deja mas barra para el contenido. */}
+              <BrandLogo altura={24} variante="sobre-oscuro" prioridad />
             </Link>
             <UserMenu nombre={context.profile.full_name} roles={roles} />
           </div>
 
+          {/* Las secciones solo en escritorio: en movil los cinco destinos que se
+              usan estan en la barra de abajo, y aqui solo quede scroll lateral. */}
           {secciones.length > 0 ? (
-            <nav aria-label="Secciones" className="mx-auto w-full max-w-6xl px-2 sm:px-3">
+            <nav aria-label="Secciones" className="mx-auto hidden w-full max-w-6xl px-3 sm:block">
               <ul className="flex gap-1 overflow-x-auto pb-2">
                 {secciones.map((item) => (
                   <li key={item.href}>
@@ -86,7 +95,9 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           ) : null}
         </header>
 
-        <main id="contenido" className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+        {/* `pb-24` en movil deja hueco a la barra fija de abajo: sin esto, la
+            ultima fila de cada lista queda debajo y no se puede leer ni tocar. */}
+        <main id="contenido" className="mx-auto w-full max-w-6xl flex-1 px-3 py-4 pb-24 sm:px-4 sm:py-6 sm:pb-6">
           {children}
         </main>
 
@@ -99,6 +110,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </footer>
 
+        <BottomNav destinos={secciones} />
         <TourPrimerIngreso />
       </div>
     </ToastProvider>

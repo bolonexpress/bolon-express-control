@@ -7,6 +7,7 @@ import { botonClass } from '@/components/ui/button';
 import { Field, errorClass, inputClass, labelClass } from '@/components/ui/field';
 import { IconCerrar, IconCheckCirculo, IconOjo } from '@/components/ui/icons';
 import { useToastDeEstado } from '@/components/ui/toast';
+import { copiarAlPortapapeles } from '@/lib/copiar';
 import { crearUsuarioAction } from '@/server/actions/users';
 import { ROLES_KEY, ROL_LABEL, ROL_RESUMEN, type RolKey } from '@/lib/validation/users';
 import type { UsuariosActionState } from '@/types/domain';
@@ -181,16 +182,17 @@ function ClaveTemporal({
   email: string;
   onListo: () => void;
 }) {
-  const [copiado, setCopiado] = useState(false);
+  const [copiado, setCopiado] = useState<'pendiente' | 'si' | 'no'>('pendiente');
 
+  /**
+   * Copia de verdad, y si no se puede, lo dice. Con HTTP plano
+   * `navigator.clipboard` no existe: el boton no puede quedarse pulsado sin
+   * hacer nada, porque el admin creeria que la clave ya esta en el portapapeles
+   * y la escribiria mal. Por eso el `<code>` de abajo es `select-all`: se
+   * selecciona y se copia a mano (ADR-020).
+   */
   const copiar = async () => {
-    try {
-      await navigator.clipboard.writeText(clave);
-      setCopiado(true);
-    } catch {
-      // Sin permiso de portapapeles: la clave se lee a mano, no pasa nada.
-      setCopiado(false);
-    }
+    setCopiado((await copiarAlPortapapeles(clave)) ? 'si' : 'no');
   };
 
   return (
@@ -209,16 +211,27 @@ function ClaveTemporal({
       </div>
 
       <p className="text-base font-semibold text-texto">Contraseña temporal</p>
-      <p className="flex flex-wrap items-center gap-3 font-mono text-2xl font-bold tracking-wide text-texto">
-        <span>{clave}</span>
+      <p className="flex flex-wrap items-center gap-3">
+        {/* `select-all` es el respaldo: en HTTP plano no hay portapapeles y la
+            clave se copia a mano. Sin esto no habria forma de llevarsela. */}
+        <code className="select-all break-all rounded-lg bg-superficie px-2 py-1 font-mono text-2xl font-bold tracking-wide text-texto">
+          {clave}
+        </code>
         <button
           type="button"
           onClick={copiar}
           className="rounded-xl bg-superficie px-3 py-2 text-sm font-semibold text-marca ring-2 ring-marca/35 hover:bg-marca-lima/25"
         >
-          {copiado ? 'Copiada' : 'Copiar'}
+          {copiado === 'si' ? 'Copiada' : 'Copiar'}
         </button>
       </p>
+
+      {copiado === 'no' ? (
+        <p role="status" className="text-sm font-semibold text-aviso">
+          Este navegador no deja copiar automáticamente. Toca la clave para seleccionarla y cópiala
+          a mano.
+        </p>
+      ) : null}
 
       <p className="flex items-start gap-2 text-sm leading-relaxed text-texto-suave">
         <IconCerrar size={22} className="mt-0.5 shrink-0" />

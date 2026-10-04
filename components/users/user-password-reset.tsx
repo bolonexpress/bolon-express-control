@@ -7,6 +7,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { IconAviso, IconCheckCirculo, IconLlave } from '@/components/ui/icons';
 import { SubmitButton } from '@/components/ui/submit-button';
 import { useToastDeEstado } from '@/components/ui/toast';
+import { copiarAlPortapapeles } from '@/lib/copiar';
 import { resetPasswordAction } from '@/server/actions/users';
 import type { UsuarioRow, UsuariosActionState } from '@/types/domain';
 
@@ -28,7 +29,9 @@ export function UserPasswordReset({ usuario }: { usuario: UsuarioRow }) {
     null,
   );
   const [confirmando, setConfirmando] = useState(false);
-  const [copiado, setCopiado] = useState(false);
+  // Tres estados y no un booleano: `no` tiene que poder distinguished de "todavia
+  // no se ha intentado", porque el mensaje es distinto (ADR-020).
+  const [copiado, setCopiado] = useState<'pendiente' | 'si' | 'no'>('pendiente');
 
   const claveTemporal = estado?.ok === true ? (estado.data.claveTemporal ?? null) : null;
   const error = estado?.ok === false ? estado.error.message : null;
@@ -39,24 +42,21 @@ export function UserPasswordReset({ usuario }: { usuario: UsuarioRow }) {
 
   /**
    * Copia de verdad, no un cartel: un boton que dice "Copiar la clave" y solo
-   * cambia de texto obliga a comprobar a mano, y al final nadie lo usa. Si la
-   * API no esta (contexto sin HTTPS, denegada por permisos), el `<code>` es
-   * `select: all`: se puede seleccionar y copiar a mano.
+   * cambia de texto obliga a comprobar a mano, y al final nadie lo usa. Con
+   * HTTP plano `navigator.clipboard` no existe, asi que se prueba tambien el
+   * camino antiguo (`copiarAlPortapapeles`) y, si tampoco, el `<code>` de abajo
+   * es `select: all`: se selecciona y se copia a mano. Nunca se finge que copio
+   * (ADR-020).
    */
   const copiar = async () => {
     if (!claveTemporal) return;
-    try {
-      await navigator.clipboard.writeText(claveTemporal);
-      setCopiado(true);
-    } catch {
-      setCopiado(false);
-    }
+    setCopiado((await copiarAlPortapapeles(claveTemporal)) ? 'si' : 'no');
   };
 
   // Al cerrar el modal se borra la clave de la pantalla. Reabrir el modal no
   // la vuelve a pintar: hace falta generar otra.
   useEffect(() => {
-    if (!confirmando) setCopiado(false);
+    if (!confirmando) setCopiado('pendiente');
   }, [confirmando]);
 
   return (
@@ -176,7 +176,7 @@ function ClaveTemporal({
   nombre,
 }: {
   clave: string;
-  copiado: boolean;
+  copiado: 'pendiente' | 'si' | 'no';
   onCopiar: () => void;
   nombre: string;
 }) {
@@ -192,14 +192,23 @@ function ClaveTemporal({
       </code>
 
       <button type="button" onClick={onCopiar} className={botonClass('secundario', 'md', 'w-full')}>
-        {copiado ? <IconCheckCirculo size={22} className="text-exito" /> : null}
-        <span>{copiado ? 'Copiada' : 'Copiar la clave'}</span>
+        {copiado === 'si' ? <IconCheckCirculo size={22} className="text-exito" /> : null}
+        <span>{copiado === 'si' ? 'Copiada' : 'Copiar la clave'}</span>
       </button>
 
-      <p className="text-sm leading-relaxed text-texto-suave">
-        {copiado
+      <p
+        role="status"
+        className={
+          copiado === 'no'
+            ? 'text-sm font-semibold leading-relaxed text-aviso'
+            : 'text-sm leading-relaxed text-texto-suave'
+        }
+      >
+        {copiado === 'si'
           ? 'Está en el portapapeles. Entrégasela a la persona por un medio seguro.'
-          : 'Toca la clave para seleccionarla y copiala, o usa el botón de arriba.'}
+          : copiado === 'no'
+            ? 'Este navegador no deja copiar automáticamente. Toca la clave para seleccionarla y cópiala a mano.'
+            : 'Toca la clave para seleccionarla y copiala, o usa el botón de arriba.'}
       </p>
     </div>
   );

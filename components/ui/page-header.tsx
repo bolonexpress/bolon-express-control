@@ -36,16 +36,18 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   return (
-    <header className="flex flex-col gap-4 border-b border-borde pb-6 sm:flex-row sm:items-start sm:justify-between">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-bold text-texto">{titulo}</h1>
+    <header className="flex flex-col gap-3 border-b border-borde pb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:pb-6">
+      <div className="space-y-1.5 sm:space-y-2">
+        <h1 className="text-2xl font-bold text-texto sm:text-3xl">{titulo}</h1>
         {descripcion ? (
-          <p className="max-w-prose text-lg leading-relaxed text-texto-suave">{descripcion}</p>
+          <p className="max-w-prose text-base leading-relaxed text-texto-suave sm:text-lg">
+            {descripcion}
+          </p>
         ) : null}
         {children}
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 sm:gap-3">
         {acciones}
         {ayuda ? <HelpButton {...ayuda} /> : null}
       </div>

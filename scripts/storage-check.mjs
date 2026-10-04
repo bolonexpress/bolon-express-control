@@ -70,6 +70,53 @@ function titulo(texto) {
   console.log(`\n--- ${texto} ---`);
 }
 
+/**
+ * Cuando la subida canonica falla con 403, el 403 no dice *que* policy fallo ni
+ * *por que*: dice lo mismo tanto si la ruta esta mal como si el helper que
+ * resuelve el movimiento esta roto. Esta funcion hace esa distincion, porque
+ * no se prueba nada: se llama a `movement_id_de_foto` (la funcion que las tres
+ * policies usan para obtener el movimiento, desde la migracion 14) y se imprime
+ * que devuelve para la MISMA ruta que acaba de ser rechazada.
+ *
+ * Se llama con `service_role` a proposito: es una funcion `stable` de solo
+ * lectura, sin efectos, y lo que interesa es su *resultado*, no si la RLS la deja
+ * pasar. Asi el diagnostico no depende de los permisos de la sesion de prueba.
+ */
+async function diagnosticarHelper(env, nombre, movimientoId) {
+  console.log(`  -- diagnostico: que resuelve movement_id_de_foto("${nombre}") --`);
+
+  const { data, error } = await createClient(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.SUPABASE_SERVICE_ROLE_KEY,
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  ).rpc('movement_id_de_foto', { p_nombre: nombre });
+
+  if (error) {
+    console.log(
+      `  resultado -> ERROR ${error.statusCode ?? ''} ${error.message}` +
+        '\n  lectura: la funcion no existe o no se puede llamar. La migracion 14 esta aplicada a medias.',
+    );
+    return;
+  }
+
+  if (data === movimientoId) {
+    console.log(
+      '  resultado -> el UUID correcto' +
+        '\n  lectura: el helper esta bien, asi que el 403 viene de otra parte de la policy' +
+        ' (permisos, bucket o el objeto ya existe).',
+    );
+  } else {
+    console.log(
+      `  resultado -> ${data === null ? 'null' : data}` +
+        `\n  lectura: el helper NO resuelve la forma canonica, asi que la policy no encuentra` +
+        `\n         el movimiento y rechaza con 403. Es el fallo de la migracion 14:` +
+        `\n         storage.foldername() excluye el nombre del archivo, asi que` +
+        `\n         <movement_id>/<archivo> tiene UNA carpeta, no dos. Se corrige con la` +
+        `\n         migracion 15.`,
+    );
+  }
+}
+
 async function main() {
   const env = leerEnv();
 
@@ -175,6 +222,7 @@ async function main() {
   });
   if (buena.error) {
     fail('subida canonica', `${buena.error.statusCode ?? ''} ${buena.error.message}`);
+    await diagnosticarHelper(env, sinBucket, movimiento.id);
   } else {
     pass('subida canonica', `201, objeto creado en ${sinBucket}`);
   }
