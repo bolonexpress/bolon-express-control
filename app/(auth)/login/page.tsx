@@ -24,12 +24,20 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       : '';
 
   const errorParam = typeof params.error === 'string' ? params.error : '';
-  const initialError =
-    errorParam === 'inactivo'
-      ? 'Tu cuenta está desactivada. Contacta al administrador.'
-      : errorParam === 'rate-limited'
-        ? 'Demasiados intentos fallidos. Intenta más tarde.'
-        : null;
+
+  // `falta_config`, `fallo_supabase` y `fallo` los manda el middleware cuando no
+  // pudo verificar la sesion. Sin este texto el usuario ve un formulario normal y
+  // no tiene forma de saber que el problema es del servidor, no su clave.
+  const erroresConocidos: Record<string, string> = {
+    inactivo: 'Tu cuenta está desactivada. Contacta al administrador.',
+    'rate-limited': 'Demasiados intentos fallidos. Intenta más tarde.',
+    falta_config:
+      'El servidor no tiene configuradas las credenciales de Supabase. Avisa al administrador.',
+    fallo_supabase: 'No se pudo verificar la sesión con el servidor. Intenta más tarde.',
+    fallo: 'Ocurrió un error al verificar la sesión. Intenta más tarde.',
+  };
+
+  const initialError = erroresConocidos[errorParam] ?? null;
 
   return <LoginForm next={next} initialError={initialError} />;
 }

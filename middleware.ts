@@ -1,6 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { applySecurityHeaders, updateSession } from '@/lib/supabase/middleware';
+import {
+  applySecurityHeaders,
+  respuestaConNonce,
+  updateSession,
+  type MotivoFallo,
+} from '@/lib/supabase/middleware';
 
 const LOGIN_PATH = '/login';
 const FORCE_PASSWORD_PATH = '/cambiar-password';
@@ -14,6 +19,72 @@ const NO_AUTORIZADO_PATH = '/no-autorizado';
 const EXENTAS_PERMISOS = new Set([LOGIN_PATH, FORCE_PASSWORD_PATH, NO_AUTORIZADO_PATH]);
 
 /**
+ * Log de diagnostico del Arranque en el Edge Runtime. Se imprime en cada
+ * peticion a proposito: es la unica forma de saber, desde los logs de Vercel, si
+ * las variables `NEXT_PUBLIC_*` llegaron al bundle del middleware. Next las
+ * inlinea en tiempo de BUILD, asi que "estan en el panel de Vercel" no implica
+ * "estaban en el bundle que se desplego": si se anaden despues del deploy, o en
+ * Preview en vez de Production, aqui saldra FALTA aunque el panel las muestre.
+ */
+function logVariables(): void {
+  console.log(
+    '[MW] Variables:',
+    process.env.NEXT_PUBLIC_SUPABASE_URL ? 'OK' : 'FALTA',
+    '/',
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'OK' : 'FALTA',
+  );
+}
+
+/** Nonce de la CSP. `crypto` y `btoa` existen en Edge, pero no se apuesta la app a ello. */
+function generarNonce(): string {
+  try {
+    return btoa(crypto.randomUUID());
+  } catch {
+    return btoa(String(Date.now()));
+  }
+}
+
+/**
+ * Respuesta de emergencia: la sesion no se pudo verificar, pero la peticion
+ * sigue teniendo que contestarse.
+ *
+ * - API: `503` con JSON. Nunca un `fetch()` del navegador debe recibir HTML.
+ * - `/login`: se deja pasar con la CSP aplicada. Es el destino estable, asi que
+ *   redirigirlo crearia el bucle que el comentario de arriba describe.
+ * - Cualquier otra pagina: a `/login?error=<motivo>` (fail-closed).
+ */
+function degradar(
+  request: NextRequest,
+  pathname: string,
+  nonce: string,
+  motivo: MotivoFallo | 'fallo',
+): NextResponse {
+  if (pathname.startsWith('/api/')) {
+    const json = NextResponse.json(
+      {
+        error:
+          motivo === 'falta_config'
+            ? 'El servidor no tiene configuradas las credenciales de Supabase.'
+            : 'No se pudo verificar la sesión. Intenta de nuevo.',
+      },
+      { status: 503 },
+    );
+    applySecurityHeaders(json, nonce);
+    return json;
+  }
+
+  if (pathname === LOGIN_PATH) {
+    return respuestaConNonce(request, nonce);
+  }
+
+  const target = new URL(LOGIN_PATH, request.url);
+  target.searchParams.set('error', motivo);
+  const redirect = NextResponse.redirect(target);
+  applySecurityHeaders(redirect, nonce);
+  return redirect;
+}
+
+/**
  * Protege TODAS las rutas de la aplicacion salvo /login.
  *
  * Capas (mas alla de esto, cada Server Action repite la comprobacion):
@@ -23,15 +94,50 @@ const EXENTAS_PERMISOS = new Set([LOGIN_PATH, FORCE_PASSWORD_PATH, NO_AUTORIZADO
  *
  * Regla anti-bucle: /login solo es un destino ESTABLE. Nunca se redirige
  * fuera de /login si la sesion no se pudo verificar, porque el guard de cada
- * pagina (`requirePageContext`) tambien manda a /login cuando no achieves un
+ * pagina (`requirePageContext`) tambien manda a /login cuando no alcanzan un
  * perfil. Si esta capa expulsara al usuario de /login hacia "/", el ciclo
  * middleware -> "/" -> guard -> /login -> middleware no tendria salida.
+ *
+ * **Nada sale de aqui sin capturar.** El middleware corre en el Edge Runtime de
+ * Vercel, donde una excepcion sin capturar no produce una pagina de error sino
+ * un `500 MIDDLEWARE_INVOCATION_FAILED` en TODAS las rutas de la aplicacion,
+ * con la build en verde: es el fallo mas caro y el mas dificil de ver. Por eso
+ * `updateSession` no lanza (ver `lib/supabase/middleware.ts`) y aqui todo el
+ * cuerpo va dentro de un `try`. Si algo falla, se degrada a /login fail-closed
+ * y el motivo viaja en `?error=` para que se pueda leer en la pantalla y en los
+ * logs de Vercel.
  */
 export async function middleware(request: NextRequest) {
-  const nonce = btoa(crypto.randomUUID());
+  logVariables();
+
+  const nonce = generarNonce();
   const { pathname, search } = request.nextUrl;
 
-  const { response, supabase, user } = await updateSession(request, nonce);
+  try {
+    return await manejar(request, pathname, search, nonce);
+  } catch (error) {
+    // Ultima red de seguridad. Un 500 opaco en todas las rutas no deja ni un
+    // rastro de que fallo; esto si, y la app sigue siendo utilizable.
+    console.error('[MW] excepcion no controlada en el middleware:', error);
+    return degradar(request, pathname, nonce, 'fallo');
+  }
+}
+
+async function manejar(
+  request: NextRequest,
+  pathname: string,
+  search: string,
+  nonce: string,
+): Promise<NextResponse> {
+  const sesion = await updateSession(request, nonce);
+
+  if (!sesion.ok) {
+    // Sin sesion verificable NO se deja pasar a la app (fail-closed), pero se
+    // responde de forma utilizable en vez de reventar el Edge Runtime.
+    return degradar(request, pathname, nonce, sesion.motivo);
+  }
+
+  const { response, supabase, user } = sesion;
 
   const redirectTo = (destination: URL) => {
     const redirect = NextResponse.redirect(destination);
@@ -51,10 +157,9 @@ export async function middleware(request: NextRequest) {
     // que responder 401 es lo honesto; la ruta vuelve a comprobarlo con
     // `getUser()` por si el middleware se dejara fuera en algun momento.
     if (pathname.startsWith('/api/')) {
-      return applySecurityHeaders(
-        NextResponse.json({ error: 'Sesión no válida.' }, { status: 401 }),
-        nonce,
-      );
+      const json = NextResponse.json({ error: 'Sesión no válida.' }, { status: 401 });
+      applySecurityHeaders(json, nonce);
+      return json;
     }
 
     const target = new URL(LOGIN_PATH, request.url);
@@ -97,10 +202,9 @@ export async function middleware(request: NextRequest) {
   // recibe 401 en vez de un HTML de otra pantalla (Fase 12B).
   if (pathname.startsWith('/api/')) {
     if (!perfil || !perfil.is_active || perfil.force_password_change) {
-      return applySecurityHeaders(
-        NextResponse.json({ error: 'Sesión no válida.' }, { status: 401 }),
-        nonce,
-      );
+      const json = NextResponse.json({ error: 'Sesión no válida.' }, { status: 401 });
+      applySecurityHeaders(json, nonce);
+      return json;
     }
     return response;
   }
@@ -112,7 +216,14 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!perfil.is_active) {
-    await supabase.auth.signOut();
+    // `signOut()` va por red a Supabase. Si falla, lo que importa es la
+    // redireccion: el token ya no vale para nada porque la sesion se marco
+    // inactiva, asi que un fallo aqui no puede impedir la salida.
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('[MW] no se pudo cerrar la sesion del usuario inactivo:', error);
+    }
     const target = new URL(LOGIN_PATH, request.url);
     target.searchParams.set('error', 'inactivo');
     return redirectTo(target);
